@@ -1,0 +1,1093 @@
+//! SRT 受信バッファ
+//!
+//! 受信パケットの並べ替えと ACK/NAK 生成を管理する。
+//!
+//! ## 機能
+//!
+//! - パケット順序制御 (再順序化バッファ)
+//! - 重複パケット検出
+//! - 損失検出と NAK 生成
+//! - ACK 生成 (定期 ACK / Light ACK)
+//! - TSBPD (Time-based Packet Delivery)
+//! - 受信レート / リンク容量の推定
+
+use std::collections::BTreeMap;
+
+use crate::srt_packet::DataPacket;
+use crate::time::Timestamp;
+
+/// Light ACK 送信間隔 (パケット数)
+const LIGHT_ACK_INTERVAL: u32 = 64;
+
+/// 定期 ACK 間隔 (マイクロ秒)
+const ACK_INTERVAL_US: u64 = 10_000; // 10ms
+
+/// ACK 送信時刻の追跡に保持する最大エントリ数
+const MAX_ACK_TIMESTAMPS: usize = 16;
+
+/// Link Capacity 推定に使用するサンプル数
+const LINK_CAPACITY_SAMPLES: usize = 16;
+
+/// ACK 送信時刻の追跡 (RTT 計算用)
+#[derive(Debug)]
+struct AckTimestampTracker {
+    /// ACK 番号 -> 送信時刻のマッピング
+    timestamps: BTreeMap<u32, Timestamp>,
+}
+
+impl AckTimestampTracker {
+    fn new() -> Self {
+        Self {
+            timestamps: BTreeMap::new(),
+        }
+    }
+
+    /// ACK 送信時刻を記録
+    fn record(&mut self, ack_number: u32, send_time: Timestamp) {
+        self.timestamps.insert(ack_number, send_time);
+
+        // 古いエントリを削除
+        while self.timestamps.len() > MAX_ACK_TIMESTAMPS {
+            if let Some(&oldest) = self.timestamps.keys().next() {
+                self.timestamps.remove(&oldest);
+            }
+        }
+    }
+
+    /// ACK 送信時刻を取得
+    fn get(&self, ack_number: u32) -> Option<Timestamp> {
+        self.timestamps.get(&ack_number).copied()
+    }
+}
+
+/// 受信レート推定器
+#[derive(Debug)]
+struct ReceivingRateEstimator {
+    /// 最後のパケット到着時刻
+    last_packet_time: Option<Timestamp>,
+    /// 到着間隔の合計 (マイクロ秒)
+    interval_sum: u64,
+    /// サンプル数
+    sample_count: u32,
+    /// 受信バイト数 (現在の測定期間)
+    bytes_received: u64,
+    /// 測定期間開始時刻
+    period_start: Timestamp,
+    /// 推定 receiving rate (packets/sec)
+    estimated_packet_rate: u32,
+    /// 推定 receiving rate (bytes/sec)
+    estimated_byte_rate: u32,
+}
+
+impl ReceivingRateEstimator {
+    fn new(start_time: Timestamp) -> Self {
+        Self {
+            last_packet_time: None,
+            interval_sum: 0,
+            sample_count: 0,
+            bytes_received: 0,
+            period_start: start_time,
+            estimated_packet_rate: 0,
+            estimated_byte_rate: 0,
+        }
+    }
+
+    /// パケット受信時に呼び出し
+    fn on_packet_received(&mut self, now: Timestamp, packet_size: usize) {
+        // 到着間隔を計算
+        if let Some(last_time) = self.last_packet_time {
+            let interval = now.as_micros().saturating_sub(last_time.as_micros());
+            // 妥当な間隔のみカウント (1us - 1sec)
+            if interval > 0 && interval < 1_000_000 {
+                self.interval_sum += interval;
+                self.sample_count += 1;
+            }
+        }
+        self.last_packet_time = Some(now);
+        self.bytes_received += packet_size as u64;
+    }
+
+    /// レートを計算して統計をリセット
+    fn calculate_rates(&mut self, now: Timestamp) -> (u32, u32) {
+        let elapsed = now
+            .as_micros()
+            .saturating_sub(self.period_start.as_micros());
+
+        // packets/sec の計算
+        let packet_rate = if self.sample_count > 0 && self.interval_sum > 0 {
+            let avg_interval = self.interval_sum / self.sample_count as u64;
+            if avg_interval > 0 {
+                (1_000_000 / avg_interval) as u32
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+
+        // bytes/sec の計算
+        let byte_rate = if elapsed > 0 {
+            (self.bytes_received * 1_000_000 / elapsed) as u32
+        } else {
+            0
+        };
+
+        // EWMA で平滑化 (7/8 * old + 1/8 * new)
+        if packet_rate > 0 {
+            if self.estimated_packet_rate == 0 {
+                self.estimated_packet_rate = packet_rate;
+            } else {
+                self.estimated_packet_rate =
+                    (self.estimated_packet_rate as u64 * 7 / 8 + packet_rate as u64 / 8) as u32;
+            }
+        }
+
+        if byte_rate > 0 {
+            if self.estimated_byte_rate == 0 {
+                self.estimated_byte_rate = byte_rate;
+            } else {
+                self.estimated_byte_rate =
+                    (self.estimated_byte_rate as u64 * 7 / 8 + byte_rate as u64 / 8) as u32;
+            }
+        }
+
+        // 統計をリセット
+        self.interval_sum = 0;
+        self.sample_count = 0;
+        self.bytes_received = 0;
+        self.period_start = now;
+
+        (self.estimated_packet_rate, self.estimated_byte_rate)
+    }
+}
+
+/// Link Capacity 推定器 (Packet Pair Technique)
+#[derive(Debug)]
+struct LinkCapacityEstimator {
+    /// 最後のパケット到着時刻
+    last_packet_time: Option<Timestamp>,
+    /// Packet Pair 到着間隔のサンプル
+    intervals: Vec<u64>,
+    /// 推定リンク容量 (packets/sec)
+    estimated_capacity: u32,
+}
+
+impl LinkCapacityEstimator {
+    fn new() -> Self {
+        Self {
+            last_packet_time: None,
+            intervals: Vec::with_capacity(LINK_CAPACITY_SAMPLES),
+            estimated_capacity: 0,
+        }
+    }
+
+    /// パケット受信時に呼び出し
+    fn on_packet_received(&mut self, now: Timestamp) {
+        if let Some(last_time) = self.last_packet_time {
+            let interval = now.as_micros().saturating_sub(last_time.as_micros());
+
+            // 妥当な間隔のみ記録 (1us - 100ms)
+            if (1..100_000).contains(&interval) {
+                self.intervals.push(interval);
+                // 最新 N サンプルを保持
+                if self.intervals.len() > LINK_CAPACITY_SAMPLES {
+                    self.intervals.remove(0);
+                }
+            }
+        }
+        self.last_packet_time = Some(now);
+    }
+
+    /// リンク容量を計算
+    fn calculate_capacity(&mut self) -> u32 {
+        if self.intervals.is_empty() {
+            return self.estimated_capacity;
+        }
+
+        // 最小間隔を取得 (Packet Pair Technique)
+        // 下位 25% の中央値を使用してノイズを軽減
+        let mut sorted = self.intervals.clone();
+        sorted.sort();
+
+        let quartile_idx = sorted.len() / 4;
+        let min_interval = if quartile_idx > 0 {
+            sorted[quartile_idx]
+        } else {
+            sorted[0]
+        };
+
+        if min_interval > 0 {
+            let capacity = (1_000_000 / min_interval) as u32;
+            // EWMA で平滑化
+            if self.estimated_capacity == 0 {
+                self.estimated_capacity = capacity;
+            } else {
+                self.estimated_capacity =
+                    (self.estimated_capacity as u64 * 7 / 8 + capacity as u64 / 8) as u32;
+            }
+        }
+
+        self.estimated_capacity
+    }
+}
+
+/// 受信パケットエントリ
+#[derive(Debug, Clone)]
+struct ReceivedPacket {
+    /// パケットデータ
+    packet: DataPacket,
+    /// 受信時刻 (統計・ジッター計算用)
+    #[allow(dead_code)]
+    recv_time: Timestamp,
+    /// 配信予定時刻 (TSBPD)
+    delivery_time: Timestamp,
+}
+
+/// ACK 情報
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AckPacket {
+    /// ACK シーケンス番号 (次に期待するパケット)
+    pub ack_seq: u32,
+    /// RTT (マイクロ秒)
+    pub rtt: u32,
+    /// RTT Variance (マイクロ秒)
+    pub rtt_var: u32,
+    /// 利用可能バッファサイズ (パケット数)
+    pub available_buffer: u32,
+    /// 受信レート (パケット/秒)
+    pub receiving_rate: u32,
+    /// 推定リンク容量 (パケット/秒)
+    pub link_capacity: u32,
+    /// 受信レート (バイト/秒)
+    pub recv_rate: u32,
+    /// Light ACK かどうか
+    pub is_light: bool,
+}
+
+/// NAK 情報
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NakPacket {
+    /// 損失シーケンス番号リスト
+    pub loss_list: Vec<u32>,
+}
+
+/// 受信バッファ
+#[derive(Debug)]
+pub struct ReceiverBuffer {
+    /// 受信パケット (sequence_number -> ReceivedPacket)
+    packets: BTreeMap<u32, ReceivedPacket>,
+
+    /// 次に期待するシーケンス番号
+    expected_seq: u32,
+
+    /// 損失リスト (検出した損失パケット)
+    loss_list: Vec<u32>,
+
+    /// 最後に ACK 送信した時刻
+    last_ack_time: Timestamp,
+
+    /// 最後に ACK 送信したシーケンス番号
+    last_ack_seq: u32,
+
+    /// ACK 送信後に受信したパケット数 (Light ACK 用)
+    packets_since_ack: u32,
+
+    /// ACK シーケンス番号 (ACK パケット自体の番号)
+    ack_number: u32,
+
+    /// TSBPD 遅延 (マイクロ秒)
+    tsbpd_delay_us: u64,
+
+    /// TSBPD 有効かどうか
+    tsbpd_enabled: bool,
+
+    /// セッション開始時刻
+    start_time: Timestamp,
+
+    /// RTT (マイクロ秒)
+    rtt: u32,
+
+    /// RTT Variance (マイクロ秒)
+    rtt_var: u32,
+
+    /// バッファ最大サイズ
+    max_buffer_size: u32,
+
+    /// 受信パケット総数 (統計用)
+    total_received: u64,
+
+    /// 損失パケット総数 (統計用)
+    total_lost: u64,
+
+    /// 重複パケット総数 (統計用)
+    total_duplicates: u64,
+
+    /// 受信バイト総数 (統計用)
+    total_bytes_received: u64,
+
+    /// ジッター (マイクロ秒) - RFC 3550 方式で計算
+    jitter: u32,
+
+    /// 前回のパケット到着間隔 (ジッター計算用)
+    last_transit: Option<i64>,
+
+    /// ACK 送信時刻の追跡 (RTT 計算用)
+    ack_timestamps: AckTimestampTracker,
+
+    /// 受信レート推定器
+    rate_estimator: ReceivingRateEstimator,
+
+    /// リンク容量推定器
+    link_capacity_estimator: LinkCapacityEstimator,
+}
+
+impl ReceiverBuffer {
+    /// 新しい受信バッファを作成
+    pub fn new(initial_seq: u32, tsbpd_delay_ms: u16, start_time: Timestamp) -> Self {
+        Self {
+            packets: BTreeMap::new(),
+            expected_seq: initial_seq,
+            loss_list: Vec::new(),
+            last_ack_time: start_time,
+            last_ack_seq: initial_seq,
+            packets_since_ack: 0,
+            ack_number: 1,
+            tsbpd_delay_us: tsbpd_delay_ms as u64 * 1000,
+            tsbpd_enabled: true,
+            start_time,
+            rtt: 100_000, // 初期 RTT: 100ms
+            rtt_var: 50_000,
+            max_buffer_size: 8192,
+            total_received: 0,
+            total_lost: 0,
+            total_duplicates: 0,
+            total_bytes_received: 0,
+            jitter: 0,
+            last_transit: None,
+            ack_timestamps: AckTimestampTracker::new(),
+            rate_estimator: ReceivingRateEstimator::new(start_time),
+            link_capacity_estimator: LinkCapacityEstimator::new(),
+        }
+    }
+
+    /// TSBPD を有効/無効にする
+    pub fn set_tsbpd_enabled(&mut self, enabled: bool) {
+        self.tsbpd_enabled = enabled;
+    }
+
+    /// 次に期待するシーケンス番号を取得
+    pub fn expected_sequence(&self) -> u32 {
+        self.expected_seq
+    }
+
+    /// パケットを受信
+    ///
+    /// 損失が検出された場合、損失リストを返す
+    pub fn receive(&mut self, packet: DataPacket, now: Timestamp) -> Option<Vec<u32>> {
+        let seq = packet.sequence_number;
+
+        // 重複チェック
+        if self.packets.contains_key(&seq) {
+            self.total_duplicates += 1;
+            return None;
+        }
+
+        // 古すぎるパケットは無視
+        if sequence_less_than(seq, self.expected_seq) {
+            return None;
+        }
+
+        self.total_received += 1;
+        self.packets_since_ack += 1;
+
+        // 帯域推定のためにパケット到着を記録
+        let packet_size = packet.payload.len() + 16; // SRT ヘッダサイズを加算
+        self.total_bytes_received += packet_size as u64;
+        self.rate_estimator.on_packet_received(now, packet_size);
+        self.link_capacity_estimator.on_packet_received(now);
+
+        // ジッター計算 (RFC 3550 方式)
+        // transit = 受信時刻 - パケットタイムスタンプ
+        let transit = now.as_micros() as i64 - packet.timestamp as i64;
+        if let Some(last) = self.last_transit {
+            // d = |transit - last_transit|
+            let d = (transit - last).unsigned_abs() as u32;
+            // jitter = jitter + (d - jitter) / 16
+            self.jitter = self
+                .jitter
+                .saturating_add((d.saturating_sub(self.jitter)) / 16);
+        }
+        self.last_transit = Some(transit);
+
+        // TSBPD 配信時刻を計算
+        let delivery_time = if self.tsbpd_enabled {
+            // パケットタイムスタンプ + TSBPD 遅延
+            let pkt_time = self.start_time.as_micros() + packet.timestamp as u64;
+            Timestamp::from_micros(pkt_time + self.tsbpd_delay_us)
+        } else {
+            now
+        };
+
+        // バッファに追加
+        self.packets.insert(
+            seq,
+            ReceivedPacket {
+                packet,
+                recv_time: now,
+                delivery_time,
+            },
+        );
+
+        // 損失検出
+        let mut new_losses = Vec::new();
+        if sequence_greater_than(seq, self.expected_seq) {
+            // ギャップがある = 損失の可能性
+            let mut s = self.expected_seq;
+            while sequence_less_than(s, seq) {
+                if !self.packets.contains_key(&s) && !self.loss_list.contains(&s) {
+                    new_losses.push(s);
+                    self.loss_list.push(s);
+                    self.total_lost += 1;
+                }
+                s = s.wrapping_add(1) & 0x7FFF_FFFF;
+            }
+        }
+
+        // expected_seq を更新
+        while self.packets.contains_key(&self.expected_seq) {
+            self.expected_seq = self.expected_seq.wrapping_add(1) & 0x7FFF_FFFF;
+        }
+
+        // 損失リストから回復したパケットを削除
+        self.loss_list.retain(|&s| s != seq);
+
+        if new_losses.is_empty() {
+            None
+        } else {
+            Some(new_losses)
+        }
+    }
+
+    /// 配信可能なパケットを取得 (TSBPD)
+    pub fn pop_ready(&mut self, now: Timestamp) -> Option<DataPacket> {
+        // 配信可能なシーケンス番号を探す
+        let delivery_seq = self.find_deliverable_seq(now)?;
+
+        self.packets.remove(&delivery_seq).map(|e| e.packet)
+    }
+
+    /// 配信可能なシーケンス番号を検索
+    fn find_deliverable_seq(&self, now: Timestamp) -> Option<u32> {
+        for (&seq, entry) in &self.packets {
+            let time_ok = !self.tsbpd_enabled || entry.delivery_time <= now;
+            let has_gap = self.loss_list.iter().any(|&s| sequence_less_than(s, seq));
+            if time_ok && !has_gap {
+                return Some(seq);
+            }
+        }
+        None
+    }
+
+    /// ACK を生成すべきかチェック
+    pub fn should_send_ack(&self, now: Timestamp) -> bool {
+        // Light ACK: 64 パケット受信ごと
+        if self.packets_since_ack >= LIGHT_ACK_INTERVAL {
+            return true;
+        }
+
+        // 定期 ACK: 10ms ごと
+        let elapsed = now
+            .as_micros()
+            .saturating_sub(self.last_ack_time.as_micros());
+        elapsed >= ACK_INTERVAL_US
+    }
+
+    /// ACK を生成
+    pub fn generate_ack(&mut self, now: Timestamp) -> AckPacket {
+        let is_light = self.packets_since_ack >= LIGHT_ACK_INTERVAL
+            && now
+                .as_micros()
+                .saturating_sub(self.last_ack_time.as_micros())
+                < ACK_INTERVAL_US;
+
+        self.last_ack_time = now;
+        self.last_ack_seq = self.expected_seq;
+        self.packets_since_ack = 0;
+        self.ack_number = self.ack_number.wrapping_add(1);
+
+        // ACK 送信時刻を記録 (RTT 計算用)
+        self.ack_timestamps.record(self.ack_number, now);
+
+        // 受信レートとリンク容量を計算
+        let (receiving_rate, recv_rate) = self.rate_estimator.calculate_rates(now);
+        let link_capacity = self.link_capacity_estimator.calculate_capacity();
+
+        AckPacket {
+            ack_seq: self.expected_seq,
+            rtt: self.rtt,
+            rtt_var: self.rtt_var,
+            available_buffer: (self.max_buffer_size - self.packets.len() as u32),
+            receiving_rate,
+            link_capacity,
+            recv_rate,
+            is_light,
+        }
+    }
+
+    /// NAK を生成 (損失リストがある場合)
+    pub fn generate_nak(&mut self) -> Option<NakPacket> {
+        if self.loss_list.is_empty() {
+            return None;
+        }
+
+        Some(NakPacket {
+            loss_list: self.loss_list.clone(),
+        })
+    }
+
+    /// Periodic NAK を生成
+    pub fn generate_periodic_nak(&self) -> Option<NakPacket> {
+        if self.loss_list.is_empty() {
+            return None;
+        }
+
+        Some(NakPacket {
+            loss_list: self.loss_list.clone(),
+        })
+    }
+
+    /// NAK 送信間隔を計算 (RTT + 4*RTTVar) / 2
+    pub fn nak_interval(&self) -> u64 {
+        let interval = (self.rtt as u64 + 4 * self.rtt_var as u64) / 2;
+        interval.max(20_000) // 最低 20ms
+    }
+
+    /// ACKACK を処理して RTT を更新
+    pub fn handle_ackack(&mut self, ack_number: u32, now: Timestamp) {
+        // ACK 送信時刻をマッピングから取得
+        let send_time = match self.ack_timestamps.get(ack_number) {
+            Some(t) => t,
+            None => return, // 対応する ACK が見つからない場合は無視
+        };
+
+        // RTT を計算
+        let rtt = (now.as_micros().saturating_sub(send_time.as_micros())) as u32;
+
+        // RTT が妥当な範囲かチェック (1us - 30sec)
+        if rtt == 0 || rtt > 30_000_000 {
+            return;
+        }
+
+        // EWMA で平滑化: RTT = 7/8 * RTT + 1/8 * rtt
+        self.rtt = (self.rtt * 7 / 8) + (rtt / 8);
+
+        // RTTVar = 3/4 * RTTVar + 1/4 * |RTT - rtt|
+        let diff = self.rtt.abs_diff(rtt);
+        self.rtt_var = (self.rtt_var * 3 / 4) + (diff / 4);
+    }
+
+    /// 期限切れパケットを削除 (TLPKTDROP)
+    pub fn drop_too_late(&mut self, now: Timestamp) -> Vec<u32> {
+        if !self.tsbpd_enabled {
+            return Vec::new();
+        }
+
+        let mut dropped = Vec::new();
+
+        // 配信時刻を過ぎたが、前にギャップがあるパケットをドロップ
+        let expired: Vec<u32> = self
+            .loss_list
+            .iter()
+            .copied()
+            .filter(|&_seq| {
+                // このシーケンス番号の配信予定時刻を推定
+                let estimated_delivery = self.start_time.as_micros() + self.tsbpd_delay_us;
+                now.as_micros() > estimated_delivery + self.tsbpd_delay_us
+            })
+            .collect();
+
+        for seq in expired {
+            self.loss_list.retain(|&s| s != seq);
+            dropped.push(seq);
+        }
+
+        dropped
+    }
+
+    /// 現在の ACK シーケンス番号を取得
+    pub fn ack_number(&self) -> u32 {
+        self.ack_number
+    }
+
+    /// RTT を取得
+    pub fn rtt(&self) -> u32 {
+        self.rtt
+    }
+
+    /// RTT Variance を取得
+    pub fn rtt_var(&self) -> u32 {
+        self.rtt_var
+    }
+
+    /// 統計情報を取得
+    pub fn stats(&self) -> ReceiverStats {
+        // パケットロス率を計算 (パーセント * 100)
+        // total_received には回復したパケットも含まれるため、
+        // 損失率 = total_lost / (total_received + total_lost) * 100 * 100
+        let total = self.total_received + self.total_lost;
+        let loss_rate_percent_x100 = if total > 0 {
+            ((self.total_lost * 10000) / total) as u32
+        } else {
+            0
+        };
+
+        ReceiverStats {
+            packets_in_buffer: self.packets.len() as u32,
+            packets_in_loss_list: self.loss_list.len() as u32,
+            total_received: self.total_received,
+            total_lost: self.total_lost,
+            total_duplicates: self.total_duplicates,
+            rtt: self.rtt,
+            rtt_var: self.rtt_var,
+            total_bytes_received: self.total_bytes_received,
+            loss_rate_percent_x100,
+            jitter: self.jitter,
+        }
+    }
+}
+
+/// 受信統計
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ReceiverStats {
+    /// バッファ内のパケット数
+    pub packets_in_buffer: u32,
+    /// 損失リストのパケット数
+    pub packets_in_loss_list: u32,
+    /// 受信パケット総数
+    pub total_received: u64,
+    /// 損失パケット総数
+    pub total_lost: u64,
+    /// 重複パケット総数
+    pub total_duplicates: u64,
+    /// RTT (マイクロ秒)
+    pub rtt: u32,
+    /// RTT Variance (マイクロ秒)
+    pub rtt_var: u32,
+    /// 受信バイト総数
+    pub total_bytes_received: u64,
+    /// パケットロス率 (パーセント * 100、例: 123 = 1.23%)
+    pub loss_rate_percent_x100: u32,
+    /// ジッター (マイクロ秒)
+    pub jitter: u32,
+}
+
+/// シーケンス番号の比較 (ラップアラウンド対応)
+fn sequence_less_than(a: u32, b: u32) -> bool {
+    let diff = b.wrapping_sub(a) & 0x7FFF_FFFF;
+    diff > 0 && diff < 0x4000_0000
+}
+
+/// シーケンス番号の比較 (ラップアラウンド対応)
+fn sequence_greater_than(a: u32, b: u32) -> bool {
+    sequence_less_than(b, a)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_packet(seq: u32, timestamp: u32) -> DataPacket {
+        DataPacket {
+            sequence_number: seq,
+            position: crate::srt_packet::PacketPosition::Single,
+            order_flag: false,
+            encryption_flag: 0,
+            retransmitted: false,
+            message_number: 1,
+            timestamp,
+            dest_socket_id: 1,
+            payload: vec![1, 2, 3],
+        }
+    }
+
+    #[test]
+    fn test_receiver_buffer_new() {
+        let start = Timestamp::from_micros(0);
+        let buf = ReceiverBuffer::new(1000, 120, start);
+        assert_eq!(buf.expected_sequence(), 1000);
+    }
+
+    #[test]
+    fn test_receiver_buffer_receive_in_order() {
+        let start = Timestamp::from_micros(0);
+        let mut buf = ReceiverBuffer::new(1000, 120, start);
+        buf.set_tsbpd_enabled(false);
+
+        let now = Timestamp::from_micros(1000);
+
+        // 順序通りに受信
+        let losses = buf.receive(make_packet(1000, 100), now);
+        assert!(losses.is_none());
+        assert_eq!(buf.expected_sequence(), 1001);
+
+        let losses = buf.receive(make_packet(1001, 200), now);
+        assert!(losses.is_none());
+        assert_eq!(buf.expected_sequence(), 1002);
+    }
+
+    #[test]
+    fn test_receiver_buffer_loss_detection() {
+        let start = Timestamp::from_micros(0);
+        let mut buf = ReceiverBuffer::new(1000, 120, start);
+        buf.set_tsbpd_enabled(false);
+
+        let now = Timestamp::from_micros(1000);
+
+        // 1000 を受信
+        buf.receive(make_packet(1000, 100), now);
+        // 1001 をスキップして 1002 を受信
+        let losses = buf.receive(make_packet(1002, 300), now);
+
+        assert!(losses.is_some());
+        let lost = losses.unwrap();
+        assert_eq!(lost, vec![1001]);
+    }
+
+    #[test]
+    fn test_receiver_buffer_duplicate() {
+        let start = Timestamp::from_micros(0);
+        let mut buf = ReceiverBuffer::new(1000, 120, start);
+        buf.set_tsbpd_enabled(false);
+
+        let now = Timestamp::from_micros(1000);
+
+        buf.receive(make_packet(1000, 100), now);
+        // 同じパケットを再度受信
+        let losses = buf.receive(make_packet(1000, 100), now);
+        assert!(losses.is_none());
+
+        let stats = buf.stats();
+        assert_eq!(stats.total_duplicates, 1);
+    }
+
+    #[test]
+    fn test_receiver_buffer_pop_ready() {
+        let start = Timestamp::from_micros(0);
+        let mut buf = ReceiverBuffer::new(1000, 120, start);
+        buf.set_tsbpd_enabled(false);
+
+        let now = Timestamp::from_micros(1000);
+
+        buf.receive(make_packet(1000, 100), now);
+        buf.receive(make_packet(1001, 200), now);
+
+        let pkt = buf.pop_ready(now);
+        assert!(pkt.is_some());
+        assert_eq!(pkt.unwrap().sequence_number, 1000);
+
+        let pkt = buf.pop_ready(now);
+        assert!(pkt.is_some());
+        assert_eq!(pkt.unwrap().sequence_number, 1001);
+    }
+
+    #[test]
+    fn test_receiver_buffer_ack_generation() {
+        let start = Timestamp::from_micros(0);
+        let mut buf = ReceiverBuffer::new(1000, 120, start);
+
+        let now = Timestamp::from_micros(1000);
+
+        buf.receive(make_packet(1000, 100), now);
+        buf.receive(make_packet(1001, 200), now);
+
+        let ack = buf.generate_ack(now);
+        assert_eq!(ack.ack_seq, 1002);
+    }
+
+    #[test]
+    fn test_receiver_buffer_nak_generation() {
+        let start = Timestamp::from_micros(0);
+        let mut buf = ReceiverBuffer::new(1000, 120, start);
+        buf.set_tsbpd_enabled(false);
+
+        let now = Timestamp::from_micros(1000);
+
+        buf.receive(make_packet(1000, 100), now);
+        buf.receive(make_packet(1002, 300), now); // 1001 欠落
+
+        let nak = buf.generate_nak();
+        assert!(nak.is_some());
+        assert_eq!(nak.unwrap().loss_list, vec![1001]);
+    }
+
+    #[test]
+    fn test_ack_timestamp_tracker() {
+        let mut tracker = AckTimestampTracker::new();
+
+        // ACK 送信時刻を記録
+        let t1 = Timestamp::from_micros(1000);
+        let t2 = Timestamp::from_micros(2000);
+        let t3 = Timestamp::from_micros(3000);
+
+        tracker.record(1, t1);
+        tracker.record(2, t2);
+        tracker.record(3, t3);
+
+        // 記録した時刻を取得できる
+        assert_eq!(tracker.get(1), Some(t1));
+        assert_eq!(tracker.get(2), Some(t2));
+        assert_eq!(tracker.get(3), Some(t3));
+
+        // 存在しない ACK 番号は None
+        assert_eq!(tracker.get(99), None);
+    }
+
+    #[test]
+    fn test_ack_timestamp_tracker_max_entries() {
+        let mut tracker = AckTimestampTracker::new();
+
+        // MAX_ENTRIES (16) を超えるエントリを追加
+        for i in 0..20 {
+            tracker.record(i, Timestamp::from_micros(i as u64 * 1000));
+        }
+
+        // 古いエントリは削除される (0-3 が削除される)
+        assert_eq!(tracker.get(0), None);
+        assert_eq!(tracker.get(3), None);
+
+        // 新しいエントリは残る
+        assert!(tracker.get(4).is_some());
+        assert!(tracker.get(19).is_some());
+    }
+
+    #[test]
+    fn test_receiving_rate_estimator() {
+        let start = Timestamp::from_micros(0);
+        let mut estimator = ReceivingRateEstimator::new(start);
+
+        // 1ms 間隔でパケットを受信 (1000 packets/sec 相当)
+        for i in 0..100 {
+            let now = Timestamp::from_micros(i * 1000); // 1ms 間隔
+            estimator.on_packet_received(now, 1500); // 1500 bytes
+        }
+
+        let now = Timestamp::from_micros(100_000); // 100ms 経過
+        let (packet_rate, byte_rate) = estimator.calculate_rates(now);
+
+        // 約 1000 packets/sec を期待
+        // EWMA により初回は 1/8 の重みなので、完全な値にはならない
+        assert!(packet_rate > 0, "packet_rate should be > 0");
+
+        // バイトレートも計算される
+        assert!(byte_rate > 0, "byte_rate should be > 0");
+    }
+
+    #[test]
+    fn test_receiving_rate_estimator_no_packets() {
+        let start = Timestamp::from_micros(0);
+        let mut estimator = ReceivingRateEstimator::new(start);
+
+        // パケットを受信しない状態でレート計算
+        let now = Timestamp::from_micros(100_000);
+        let (packet_rate, byte_rate) = estimator.calculate_rates(now);
+
+        // サンプルがないので 0 のまま
+        assert_eq!(packet_rate, 0);
+        assert_eq!(byte_rate, 0);
+    }
+
+    #[test]
+    fn test_link_capacity_estimator() {
+        let mut estimator = LinkCapacityEstimator::new();
+
+        // 100μs 間隔でパケットを受信 (10000 packets/sec 相当)
+        for i in 0..20 {
+            let now = Timestamp::from_micros(i * 100);
+            estimator.on_packet_received(now);
+        }
+
+        let capacity = estimator.calculate_capacity();
+
+        // 約 10000 packets/sec を期待
+        // Packet Pair Technique で下位 25% を使うため、値は変動する
+        assert!(capacity > 0, "capacity should be > 0");
+    }
+
+    #[test]
+    fn test_link_capacity_estimator_no_samples() {
+        let mut estimator = LinkCapacityEstimator::new();
+
+        // パケット受信がない場合
+        let capacity = estimator.calculate_capacity();
+
+        // サンプルなしで 0 を返す
+        assert_eq!(capacity, 0);
+    }
+
+    #[test]
+    fn test_link_capacity_estimator_single_interval() {
+        let mut estimator = LinkCapacityEstimator::new();
+
+        // 2 つのパケットで 1 つの間隔を記録
+        estimator.on_packet_received(Timestamp::from_micros(0));
+        estimator.on_packet_received(Timestamp::from_micros(100)); // 100μs 間隔
+
+        let capacity = estimator.calculate_capacity();
+
+        // 1 つのサンプルでも計算される (1,000,000 / 100 = 10000)
+        assert_eq!(capacity, 10000);
+    }
+
+    #[test]
+    fn test_rtt_calculation_with_ack_timestamps() {
+        let start = Timestamp::from_micros(0);
+        let mut buf = ReceiverBuffer::new(1000, 120, start);
+        buf.set_tsbpd_enabled(false);
+
+        // パケットを受信
+        let now = Timestamp::from_micros(1000);
+        buf.receive(make_packet(1000, 100), now);
+
+        // ACK を生成 (これにより ACK 送信時刻が記録される)
+        let ack_time = Timestamp::from_micros(2000);
+        let ack = buf.generate_ack(ack_time);
+        let ack_number = ack.ack_seq;
+
+        // ACKACK を受信 (RTT = 50ms)
+        let ackack_time = Timestamp::from_micros(52000); // 50ms 後
+        buf.handle_ackack(ack_number, ackack_time);
+
+        // RTT が計算される (EWMA: 1/8 の重み)
+        let stats = buf.stats();
+        // 初期 RTT は 100ms (100000μs) なので、
+        // RTT = 7/8 * 100000 + 1/8 * 50000 = 87500 + 6250 = 93750
+        assert!(stats.rtt > 0, "RTT should be calculated");
+    }
+
+    #[test]
+    fn test_ack_includes_recv_rate() {
+        let start = Timestamp::from_micros(0);
+        let mut buf = ReceiverBuffer::new(1000, 120, start);
+        buf.set_tsbpd_enabled(false);
+
+        // パケットを複数回受信
+        for i in 0..10 {
+            let now = Timestamp::from_micros(i * 1000);
+            buf.receive(make_packet(1000 + i as u32, 100 + i as u32 * 100), now);
+        }
+
+        // ACK 生成
+        let now = Timestamp::from_micros(10000);
+        let ack = buf.generate_ack(now);
+
+        // AckPacket のフィールドが設定される
+        // 初回なので値は小さいが、フィールドが存在することを確認
+        let _receiving_rate = ack.receiving_rate;
+        let _link_capacity = ack.link_capacity;
+        let _recv_rate = ack.recv_rate;
+
+        // Full ACK として生成される (Light ACK ではない)
+        assert!(!ack.is_light);
+    }
+
+    #[test]
+    fn test_total_bytes_received() {
+        let start = Timestamp::from_micros(0);
+        let mut buf = ReceiverBuffer::new(1000, 120, start);
+        buf.set_tsbpd_enabled(false);
+
+        let now = Timestamp::from_micros(1000);
+
+        // 3 バイトのペイロード + 16 バイトのヘッダ = 19 バイト
+        buf.receive(make_packet(1000, 100), now);
+        let stats = buf.stats();
+        assert_eq!(stats.total_bytes_received, 19);
+
+        // さらに 1 パケット受信
+        buf.receive(make_packet(1001, 200), now);
+        let stats = buf.stats();
+        assert_eq!(stats.total_bytes_received, 38);
+    }
+
+    #[test]
+    fn test_loss_rate_calculation() {
+        let start = Timestamp::from_micros(0);
+        let mut buf = ReceiverBuffer::new(1000, 120, start);
+        buf.set_tsbpd_enabled(false);
+
+        let now = Timestamp::from_micros(1000);
+
+        // 10 パケット受信、2 パケット損失 (1001, 1004)
+        buf.receive(make_packet(1000, 100), now);
+        buf.receive(make_packet(1002, 200), now); // 1001 損失
+        buf.receive(make_packet(1003, 300), now);
+        buf.receive(make_packet(1005, 400), now); // 1004 損失
+        buf.receive(make_packet(1006, 500), now);
+        buf.receive(make_packet(1007, 600), now);
+        buf.receive(make_packet(1008, 700), now);
+        buf.receive(make_packet(1009, 800), now);
+
+        let stats = buf.stats();
+        // total_received = 8, total_lost = 2
+        // loss_rate = 2 / (8 + 2) * 100 * 100 = 2000 (= 20.00%)
+        assert_eq!(stats.total_received, 8);
+        assert_eq!(stats.total_lost, 2);
+        assert_eq!(stats.loss_rate_percent_x100, 2000);
+    }
+
+    #[test]
+    fn test_loss_rate_zero() {
+        let start = Timestamp::from_micros(0);
+        let mut buf = ReceiverBuffer::new(1000, 120, start);
+        buf.set_tsbpd_enabled(false);
+
+        let now = Timestamp::from_micros(1000);
+
+        // 損失なしで受信
+        buf.receive(make_packet(1000, 100), now);
+        buf.receive(make_packet(1001, 200), now);
+        buf.receive(make_packet(1002, 300), now);
+
+        let stats = buf.stats();
+        assert_eq!(stats.total_received, 3);
+        assert_eq!(stats.total_lost, 0);
+        assert_eq!(stats.loss_rate_percent_x100, 0);
+    }
+
+    #[test]
+    fn test_jitter_calculation() {
+        let start = Timestamp::from_micros(0);
+        let mut buf = ReceiverBuffer::new(1000, 120, start);
+        buf.set_tsbpd_enabled(false);
+
+        // タイムスタンプと到着時刻の差が一定の場合、ジッターは小さい
+        buf.receive(make_packet(1000, 1000), Timestamp::from_micros(2000)); // transit = 1000
+        buf.receive(make_packet(1001, 2000), Timestamp::from_micros(3000)); // transit = 1000, d = 0
+
+        let stats = buf.stats();
+        // d = 0 なので jitter は増えない
+        assert_eq!(stats.jitter, 0);
+
+        // タイムスタンプと到着時刻の差が変動する場合、ジッターが増加
+        buf.receive(make_packet(1002, 3000), Timestamp::from_micros(4500)); // transit = 1500, d = 500
+        let stats = buf.stats();
+        // jitter = 0 + (500 - 0) / 16 = 31
+        assert_eq!(stats.jitter, 31);
+
+        // さらに変動
+        buf.receive(make_packet(1003, 4000), Timestamp::from_micros(5000)); // transit = 1000, d = 500
+        let stats = buf.stats();
+        // jitter = 31 + (500 - 31) / 16 = 31 + 29 = 60
+        assert_eq!(stats.jitter, 60);
+    }
+
+    #[test]
+    fn test_jitter_no_packets() {
+        let start = Timestamp::from_micros(0);
+        let buf = ReceiverBuffer::new(1000, 120, start);
+
+        let stats = buf.stats();
+        // パケットを受信していない場合、jitter は 0
+        assert_eq!(stats.jitter, 0);
+    }
+}

@@ -1,0 +1,18 @@
+[package]
+name = "srt_listener"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+shiguredo_srt = { path = "../.." }
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "net",
+    "time",
+] }
+noargs = "0.4"
+mpeg2ts = "0.5"
+shiguredo_mp4 = "2026.1"
+getrandom = "0.3"

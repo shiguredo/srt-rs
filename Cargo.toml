@@ -1,0 +1,23 @@
+[package]
+name = "shiguredo_srt"
+version = "2026.0.0"
+edition = "2024"
+rust-version = "1.88"
+authors = ["Shiguredo Inc."]
+license = "Apache-2.0"
+description = "SRT (Secure Reliable Transport) library"
+homepage = "https://github.com/shiguredo/srt-rs"
+repository = "https://github.com/shiguredo/srt-rs"
+readme = "README.md"
+
+[dependencies]
+aws-lc-rs = "1"
+
+[workspace]
+members = [
+    "crates/c-api",
+    "examples/srt_caller",
+    "examples/srt_listener",
+    "pbt",
+]
+exclude = ["fuzz"]

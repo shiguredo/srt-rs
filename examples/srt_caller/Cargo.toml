@@ -1,0 +1,19 @@
+[package]
+name = "srt_caller"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+shiguredo_srt = { path = "../.." }
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "net",
+    "time",
+    "sync",
+] }
+noargs = "0.4"
+mpeg2ts = "0.5"
+shiguredo_mp4 = "2026.1"
+getrandom = "0.3"

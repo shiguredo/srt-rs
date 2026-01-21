@@ -1,0 +1,7 @@
+language = "C"
+include_guard = "SHIGUREDO_SRT_H"
+no_includes = true
+sys_includes = ["stdint.h", "stdbool.h", "stddef.h"]
+
+[enum]
+rename_variants = "QualifiedScreamingSnakeCase"

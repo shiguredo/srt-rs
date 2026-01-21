@@ -1,0 +1,15 @@
+[package]
+name = "shiguredo_srt_c_api"
+version = "2026.0.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "srt"
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+shiguredo_srt = { path = "../.." }
+
+[build-dependencies]
+cbindgen = "0.29"
