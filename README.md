@@ -1,5 +1,9 @@
 # srt-rs
 
+[![shiguredo_srt](https://img.shields.io/crates/v/shiguredo_srt.svg)](https://crates.io/crates/shiguredo_srt)
+[![Documentation](https://docs.rs/shiguredo_srt/badge.svg)](https://docs.rs/shiguredo_srt)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+
 ## About Shiguredo's open source software
 
 We will not respond to PRs or issues that have not been discussed on Discord. Also, Discord is only available in Japanese.
