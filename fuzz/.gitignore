@@ -1,5 +1,4 @@
 target/
 Cargo.lock
 artifacts/
-fuzz_targets/
 corpus/
