@@ -1,6 +1,7 @@
 # Listener が Caller の Initial Packet Sequence Number を採用していない
 
 Created: 2026-04-20
+Completed: 2026-04-20
 Model: Opus 4.7
 
 ## 概要
@@ -30,3 +31,9 @@ self.initial_seq = hs.initial_packet_seq;
 - `src/srt_connection.rs:819-868` - `handle_handshake_listener` の CONCLUSION 分岐
 - `src/srt_connection.rs:1268-1306` - `send_conclusion_response` (`self.initial_seq` を参照する)
 - `refs/srt/draft-sharabayko-srt.md:1651-1669` - Conclusion Response 仕様
+
+## 解決方法
+
+`src/srt_connection.rs` の `handle_handshake_listener` の `HandshakeType::Conclusion` 分岐において、Cookie 検証直後に `self.initial_seq = hs.initial_packet_seq;` を追加した。これにより `send_conclusion_response` で生成される CONCLUSION レスポンスの Initial Packet Sequence Number が Caller のものと一致するようになる。
+
+CHANGES.md に `[FIX]` エントリを追加した。

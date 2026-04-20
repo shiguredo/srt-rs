@@ -827,6 +827,10 @@ impl SrtConnection {
                     return Err(Error::handshake_rejected("invalid SYN cookie"));
                 }
 
+                // SRT 仕様 (Conclusion Response): Listener が Caller に優先権を持つのは
+                // Cipher Family と Block Size のみ。ISN は Caller の値を採用する。
+                self.initial_seq = hs.initial_packet_seq;
+
                 // Stream ID を取得・保存
                 if let Some(stream_id) = hs.get_sid_extension() {
                     self.peer_stream_id = Some(stream_id);
