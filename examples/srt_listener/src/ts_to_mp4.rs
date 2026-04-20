@@ -440,11 +440,11 @@ impl<R: std::io::Read> ReadTsPacket for TsPacketReaderWrapper<R> {
                             .insert(es_info.elementary_pid, es_info.stream_type);
                     }
                 }
-                Some(TsPayload::Pes(pes)) => {
-                    if self.pid_to_stream_type.contains_key(&packet.header.pid) {
-                        self.stream_id_to_pid
-                            .insert(pes.header.stream_id, packet.header.pid);
-                    }
+                Some(TsPayload::Pes(pes))
+                    if self.pid_to_stream_type.contains_key(&packet.header.pid) =>
+                {
+                    self.stream_id_to_pid
+                        .insert(pes.header.stream_id, packet.header.pid);
                 }
                 _ => {}
             }
@@ -811,6 +811,7 @@ pub fn convert_ts_to_mp4(ts_data: &[u8], output_path: &Path) -> Result<(), Conve
             keyframe: sample.keyframe,
             timescale: video_timescale,
             duration,
+            composition_time_offset: None,
             data_offset: current_offset,
             data_size: sample.data.len(),
         };
@@ -838,6 +839,7 @@ pub fn convert_ts_to_mp4(ts_data: &[u8], output_path: &Path) -> Result<(), Conve
                 keyframe: true, // AAC は常にキーフレーム
                 timescale: audio_timescale,
                 duration: AAC_SAMPLES_PER_FRAME,
+                composition_time_offset: None,
                 data_offset: current_offset,
                 data_size: sample.data.len(),
             };

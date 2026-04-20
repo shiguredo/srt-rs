@@ -175,7 +175,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 乱数を生成
     fn rand_u32() -> u32 {
         let mut bytes = [0u8; 4];
-        getrandom::fill(&mut bytes).expect("failed to generate random bytes");
+        aws_lc_rs::rand::fill(&mut bytes).expect("failed to generate random bytes");
         u32::from_le_bytes(bytes)
     }
 

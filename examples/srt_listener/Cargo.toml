@@ -14,5 +14,5 @@ tokio = { version = "1", features = [
 ] }
 noargs = "0.4"
 mpeg2ts = "0.5"
-shiguredo_mp4 = "2026.1"
-getrandom = "0.3"
+shiguredo_mp4 = "2026.3"
+aws-lc-rs = "1.16"

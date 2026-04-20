@@ -238,7 +238,7 @@ proptest! {
 
         let packets = buf.push_message(&payload, max_payload, 100, 1, now);
 
-        let expected_count = (payload_size + max_payload - 1) / max_payload;
+        let expected_count = payload_size.div_ceil(max_payload);
         prop_assert_eq!(packets.len(), expected_count);
 
         // 全ペイロードが含まれているか確認
