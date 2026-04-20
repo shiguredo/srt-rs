@@ -195,14 +195,13 @@ impl LiveCc {
 
     /// パケット送信間隔を更新
     fn update_pkt_snd_period(&mut self) {
+        // calculate_max_bandwidth は必ず 1 以上を返すのでゼロ除算は発生しない
         let max_bw = self.calculate_max_bandwidth();
-        if max_bw > 0 {
-            let pkt_size = self.avg_payload_size + Self::SRT_HEADER_SIZE;
-            // PKT_SND_PERIOD = pkt_size * 1000000 / max_bw (マイクロ秒)
-            self.pkt_snd_period = pkt_size * 1_000_000 / max_bw;
-            if self.pkt_snd_period == 0 {
-                self.pkt_snd_period = 1;
-            }
+        let pkt_size = self.avg_payload_size + Self::SRT_HEADER_SIZE;
+        // PKT_SND_PERIOD = pkt_size * 1000000 / max_bw (マイクロ秒)
+        self.pkt_snd_period = pkt_size * 1_000_000 / max_bw;
+        if self.pkt_snd_period == 0 {
+            self.pkt_snd_period = 1;
         }
     }
 

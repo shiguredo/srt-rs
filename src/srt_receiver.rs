@@ -116,21 +116,15 @@ impl ReceivingRateEstimator {
         // packets/sec の計算
         let packet_rate = if self.sample_count > 0 && self.interval_sum > 0 {
             let avg_interval = self.interval_sum / self.sample_count as u64;
-            if avg_interval > 0 {
-                (1_000_000 / avg_interval) as u32
-            } else {
-                0
-            }
+            1_000_000u64.checked_div(avg_interval).unwrap_or(0) as u32
         } else {
             0
         };
 
         // bytes/sec の計算
-        let byte_rate = if elapsed > 0 {
-            (self.bytes_received * 1_000_000 / elapsed) as u32
-        } else {
-            0
-        };
+        let byte_rate = (self.bytes_received * 1_000_000)
+            .checked_div(elapsed)
+            .unwrap_or(0) as u32;
 
         // EWMA で平滑化 (7/8 * old + 1/8 * new)
         if packet_rate > 0 {
@@ -216,8 +210,7 @@ impl LinkCapacityEstimator {
             sorted[0]
         };
 
-        if min_interval > 0 {
-            let capacity = (1_000_000 / min_interval) as u32;
+        if let Some(capacity) = 1_000_000u64.checked_div(min_interval).map(|v| v as u32) {
             // EWMA で平滑化
             if self.estimated_capacity == 0 {
                 self.estimated_capacity = capacity;
@@ -635,11 +628,8 @@ impl ReceiverBuffer {
         // total_received には回復したパケットも含まれるため、
         // 損失率 = total_lost / (total_received + total_lost) * 100 * 100
         let total = self.total_received + self.total_lost;
-        let loss_rate_percent_x100 = if total > 0 {
-            ((self.total_lost * 10000) / total) as u32
-        } else {
-            0
-        };
+        let loss_rate_percent_x100 =
+            (self.total_lost * 10000).checked_div(total).unwrap_or(0) as u32;
 
         ReceiverStats {
             packets_in_buffer: self.packets.len() as u32,
