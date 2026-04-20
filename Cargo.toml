@@ -8,6 +8,7 @@ readme = "README.md"
 homepage = "https://github.com/shiguredo/srt-rs"
 repository = "https://github.com/shiguredo/srt-rs"
 license = "Apache-2.0"
+include = ["/src/**", "LICENSE", "README.md"]
 
 [workspace]
 members = [

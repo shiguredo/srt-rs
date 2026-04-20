@@ -811,6 +811,7 @@ pub fn convert_ts_to_mp4(ts_data: &[u8], output_path: &Path) -> Result<(), Conve
             keyframe: sample.keyframe,
             timescale: video_timescale,
             duration,
+            composition_time_offset: None,
             data_offset: current_offset,
             data_size: sample.data.len(),
         };
@@ -838,6 +839,7 @@ pub fn convert_ts_to_mp4(ts_data: &[u8], output_path: &Path) -> Result<(), Conve
                 keyframe: true, // AAC は常にキーフレーム
                 timescale: audio_timescale,
                 duration: AAC_SAMPLES_PER_FRAME,
+                composition_time_offset: None,
                 data_offset: current_offset,
                 data_size: sample.data.len(),
             };
