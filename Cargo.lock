@@ -667,7 +667,7 @@ dependencies = [
 name = "srt_listener"
 version = "0.0.0"
 dependencies = [
- "getrandom 0.3.4",
+ "aws-lc-rs",
  "mpeg2ts",
  "noargs",
  "shiguredo_mp4",
