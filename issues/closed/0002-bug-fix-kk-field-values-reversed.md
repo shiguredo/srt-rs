@@ -2,6 +2,7 @@
 
 - Priority: High
 - Created: 2026-05-14
+- Completed: 2026-05-14
 - Model: DeepSeek V4 Pro
 - Branch: feature/fix-kk-field-values-reversed
 
@@ -126,3 +127,14 @@ draft-sharabayko-srt.md の 2 箇所で KK フィールドの値が定義され�
 - 仕様値を直接検証する単体テストが追加されていること
 - 既存の全テスト (`cargo test`) が通過すること
 - `CHANGES.md` の `## develop` セクションに `[FIX]` エントリが追加されていること
+
+## 解決方法
+
+1. `src/crypto.rs` の `KeyFlag` 判別子値を仕様通りに修正:
+   - `Even = 0b01`、`Odd = 0b10` に変更
+2. `src/crypto.rs` の `from_kk_field` のマッチアームを入れ替え:
+   - `0b01 => Some(KeyFlag::Even)`、`0b10 => Some(KeyFlag::Odd)` に修正
+3. `src/srt_packet.rs` のコメントを修正:
+   - `01b: 偶数キー, 10b: 奇数キー` に変更
+4. `src/crypto.rs` のテストに `test_key_flag_kk_field_mapping` を追加し、仕様値をハードアサート
+5. `CHANGES.md` に `[FIX]` エントリを追加

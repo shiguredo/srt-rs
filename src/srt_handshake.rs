@@ -275,7 +275,7 @@ impl HandshakePacket {
         let socket_id = buf.read_u32()?;
         let syn_cookie = buf.read_u32()?;
 
-        // Peer IP (128 bits = 16 bytes)
+        // ピア IP (128 ビット = 16 バイト)
         let ip_bytes = buf.read_bytes(16)?;
         let peer_ip = parse_peer_ip(&ip_bytes);
 
@@ -475,28 +475,9 @@ impl HandshakePacket {
     /// Stream ID は UTF-8 文字列で、最大 512 バイト。
     /// 32-bit little endian words として格納される。
     pub fn add_sid_extension(&mut self, stream_id: &str) {
-        let bytes = stream_id.as_bytes();
-        // 最大 512 バイトに制限
-        let len = bytes.len().min(512);
-        let truncated = &bytes[..len];
-
-        // 4 バイト境界にパディング
-        let padded_len = (len + 3) & !3;
-        let mut data = vec![0u8; padded_len];
-
-        // 32-bit little endian words として格納
-        // 各 4 バイトブロック内でバイト順を反転
-        for (i, chunk) in truncated.chunks(4).enumerate() {
-            let offset = i * 4;
-            for (j, &byte) in chunk.iter().enumerate() {
-                // リトルエンディアン: バイト順を反転 (0,1,2,3 -> 3,2,1,0)
-                data[offset + (3 - j)] = byte;
-            }
-        }
-
         self.extensions.push(HandshakeExtension {
             ext_type: ExtensionType::Sid,
-            data,
+            data: encode_le_words(stream_id, 512),
         });
     }
 
@@ -507,22 +488,7 @@ impl HandshakePacket {
     pub fn get_sid_extension(&self) -> Option<String> {
         for ext in &self.extensions {
             if ext.ext_type == ExtensionType::Sid {
-                let mut bytes = Vec::with_capacity(ext.data.len());
-
-                // 32-bit little endian words からバイト順を復元
-                for chunk in ext.data.chunks(4) {
-                    for i in (0..chunk.len()).rev() {
-                        bytes.push(chunk[i]);
-                    }
-                }
-
-                // 末尾のゼロパディングを除去
-                while bytes.last() == Some(&0) {
-                    bytes.pop();
-                }
-
-                // UTF-8 として解釈
-                return String::from_utf8(bytes).ok();
+                return decode_le_words(&ext.data);
             }
         }
         None
@@ -535,28 +501,9 @@ impl HandshakePacket {
     ///
     /// Stream ID と同様に 32-bit little endian words として格納される。
     pub fn add_congestion_extension(&mut self, congestion_control: &str) {
-        let bytes = congestion_control.as_bytes();
-        // 最大 512 バイトに制限
-        let len = bytes.len().min(512);
-        let truncated = &bytes[..len];
-
-        // 4 バイト境界にパディング
-        let padded_len = (len + 3) & !3;
-        let mut data = vec![0u8; padded_len];
-
-        // 32-bit little endian words として格納
-        // 各 4 バイトブロック内でバイト順を反転
-        for (i, chunk) in truncated.chunks(4).enumerate() {
-            let offset = i * 4;
-            for (j, &byte) in chunk.iter().enumerate() {
-                // リトルエンディアン: バイト順を反転 (0,1,2,3 -> 3,2,1,0)
-                data[offset + (3 - j)] = byte;
-            }
-        }
-
         self.extensions.push(HandshakeExtension {
             ext_type: ExtensionType::Congestion,
-            data,
+            data: encode_le_words(congestion_control, 512),
         });
     }
 
@@ -567,26 +514,47 @@ impl HandshakePacket {
     pub fn get_congestion_extension(&self) -> Option<String> {
         for ext in &self.extensions {
             if ext.ext_type == ExtensionType::Congestion {
-                let mut bytes = Vec::with_capacity(ext.data.len());
-
-                // 32-bit little endian words からバイト順を復元
-                for chunk in ext.data.chunks(4) {
-                    for i in (0..chunk.len()).rev() {
-                        bytes.push(chunk[i]);
-                    }
-                }
-
-                // 末尾のゼロパディングを除去
-                while bytes.last() == Some(&0) {
-                    bytes.pop();
-                }
-
-                // UTF-8 として解釈
-                return String::from_utf8(bytes).ok();
+                return decode_le_words(&ext.data);
             }
         }
         None
     }
+}
+
+/// 文字列を 32-bit little endian words 形式にエンコードする
+fn encode_le_words(s: &str, max_len: usize) -> Vec<u8> {
+    let bytes = s.as_bytes();
+    let len = bytes.len().min(max_len);
+    let truncated = &bytes[..len];
+
+    let padded_len = (len + 3) & !3;
+    let mut data = vec![0u8; padded_len];
+
+    for (i, chunk) in truncated.chunks(4).enumerate() {
+        let offset = i * 4;
+        for (j, &byte) in chunk.iter().enumerate() {
+            data[offset + (3 - j)] = byte;
+        }
+    }
+
+    data
+}
+
+/// 32-bit little endian words 形式から文字列をデコードする
+fn decode_le_words(data: &[u8]) -> Option<String> {
+    let mut bytes = Vec::with_capacity(data.len());
+
+    for chunk in data.chunks(4) {
+        for i in (0..chunk.len()).rev() {
+            bytes.push(chunk[i]);
+        }
+    }
+
+    while bytes.last() == Some(&0) {
+        bytes.pop();
+    }
+
+    String::from_utf8(bytes).ok()
 }
 
 /// ハンドシェイク拡張
@@ -744,7 +712,6 @@ impl KmMessage {
         let mut buf = Vec::new();
 
         // 最初の 4 バイト: S(1) | V(3) | PT(4) | Sign(16) | Resv1(6) | KK(2)
-        // S = 0, V = 1, PT = 2
         let first_byte = (self.version << 4) | self.packet_type;
         buf.write_u8(first_byte);
         buf.write_u16(KM_SIGNATURE);

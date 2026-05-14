@@ -2,6 +2,7 @@
 
 - Priority: High
 - Created: 2026-05-14
+- Completed: 2026-05-14
 - Model: DeepSeek V4 Pro
 - Branch: feature/fix-unwrap-sek-short-input-panic
 
@@ -64,3 +65,9 @@ if wrapped.len() < 8 {
 - 上記のテストが追加されていること
 - `cargo test` で全テストが通過すること
 - `CHANGES.md` の `## develop` セクションに `[FIX]` エントリが追加されていること
+
+## 解決方法
+
+1. `src/crypto.rs` の `unwrap_sek` 関数の先頭に `wrapped.len() < 8` のサイズチェックを追加
+2. `src/crypto.rs` に `test_unwrap_sek_short_input` テストを追加
+3. `CHANGES.md` に `[FIX]` エントリを追加

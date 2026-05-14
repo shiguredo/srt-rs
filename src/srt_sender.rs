@@ -11,7 +11,7 @@
 
 use std::collections::{BTreeMap, VecDeque};
 
-use crate::srt_packet::{DataPacket, PacketPosition};
+use crate::srt_packet::{sequence_less_than, DataPacket, PacketPosition};
 use crate::time::Timestamp;
 
 /// 送信パケットエントリ
@@ -315,7 +315,7 @@ impl SenderBuffer {
             .packets
             .keys()
             .copied()
-            .take_while(|&seq| sequence_less_than(seq, ack_seq))
+            .filter(|&seq| sequence_less_than(seq, ack_seq))
             .collect();
 
         for seq in to_remove {
@@ -426,13 +426,6 @@ pub struct SenderStats {
     pub retransmits_many: u32,
 }
 
-/// シーケンス番号の比較 (ラップアラウンド対応)
-fn sequence_less_than(a: u32, b: u32) -> bool {
-    // 31 ビットシーケンス番号の比較
-    let diff = b.wrapping_sub(a) & 0x7FFF_FFFF;
-    diff > 0 && diff < 0x4000_0000
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -529,5 +522,32 @@ mod tests {
         // 1000μs 後は送信可能
         assert!(buf.can_send_with_pacing(Timestamp::from_micros(1000)));
         assert_eq!(buf.time_until_send(Timestamp::from_micros(1000)), 0);
+    }
+
+    #[test]
+    fn test_handle_ack_wrap_around() {
+        // BTreeMap の自然順とシーケンス番号順が一致しないラップアラウンド境界のテスト
+        // take_while では途中で停止しラップ前のパケットが取りこぼされるが、
+        // filter であれば全要素が巡回され正しく削除される
+        let mut buf = SenderBuffer::new(0x7FFF_FFFD, 8192, 120);
+        let now = Timestamp::from_micros(0);
+
+        // 0x7FFF_FFFD, 0x7FFF_FFFE, 0x7FFF_FFFF (ラップ前)
+        buf.push(vec![1], 100, 1, now);
+        buf.push(vec![2], 100, 1, now);
+        buf.push(vec![3], 100, 1, now);
+        // 0, 1, 3 (ラップ後, 3 は ACK されずに残る)
+        buf.push(vec![4], 100, 1, now);
+        buf.push(vec![5], 100, 1, now);
+        buf.push(vec![6], 100, 1, now);
+
+        assert_eq!(buf.packets_in_flight(), 6);
+
+        // ACK 2: 0, 1, 0x7FFF_FFFD, 0x7FFF_FFFE, 0x7FFF_FFFF が削除対象
+        // BTreeMap 順: [0, 1, 3, 0x7FFF_FFFD, 0x7FFF_FFFE, 0x7FFF_FFFF]
+        // take_while の場合: 0, 1 まで処理し 3 で停止 → ラップ前が残る
+        // filter の場合: 全巡回 → ラップ前も削除される
+        buf.handle_ack(2);
+        assert_eq!(buf.packets_in_flight(), 1);
     }
 }

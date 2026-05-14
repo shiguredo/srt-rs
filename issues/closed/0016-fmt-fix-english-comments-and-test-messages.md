@@ -2,6 +2,7 @@
 
 - Priority: Low
 - Created: 2026-05-14
+- Completed: 2026-05-14
 - Model: DeepSeek V4 Pro
 - Branch: feature/fix-english-comments-and-test-messages
 
@@ -57,3 +58,11 @@ AGENTS.md に「コメントは全て日本語にすること」「テストメ�
 - 上記 8 箇所が日本語に修正されていること
 - 英語のコメント/テストメッセージが残っていないこと（全ソースを grep で確認）
 - `cargo test` で全テストが通過すること
+
+## 解決方法
+
+1. `src/srt_connection.rs:594` の `// Private methods` を `// プライベートメソッド` に修正
+2. `src/srt_handshake.rs:278` の `// Peer IP (128 bits = 16 bytes)` を `// ピア IP (128 ビット = 16 バイト)` に修正
+3. `src/srt_handshake.rs:747` の `// S = 0, V = 1, PT = 2` を削除
+4. `src/srt_receiver.rs` の英語テストメッセージ 4 件を日本語に修正
+5. `src/srt_congestion.rs` の修正対象 7, 8 は #0003 のファイル削除により不要化

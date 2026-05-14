@@ -2,6 +2,7 @@
 
 - Priority: Low
 - Created: 2026-05-14
+- Completed: 2026-05-14
 - Model: DeepSeek V4 Pro
 - Branch: feature/refactor-cleanup-error-dead-code
 
@@ -43,3 +44,10 @@
 - 未使用のコードが削除されていること
 - 不要な `#[allow(dead_code)]` 属性が削除されていること
 - `cargo test` で全テストが通過すること
+
+## 解決方法
+
+1. `ErrorKind::InvalidInput`、`ErrorKind::Unsupported`、`ErrorKind::ProtocolViolation` の未使用バリアントを削除
+2. `invalid_input`、`unsupported`、`protocol_violation` の未使用コンストラクタを削除
+3. `srt_rejection_code` フィールド、`with_srt_rejection_code` メソッド、Display 実装内の関連分岐を削除
+4. 使用中の `crypto_error` と `handshake_rejected` から `#[allow(dead_code)]` 属性を削除

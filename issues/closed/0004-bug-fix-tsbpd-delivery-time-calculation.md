@@ -2,6 +2,7 @@
 
 - Priority: High
 - Created: 2026-05-14
+- Completed: 2026-05-14
 - Model: DeepSeek V4 Pro
 - Branch: feature/fix-tsbpd-delivery-time-calculation
 
@@ -104,3 +105,14 @@ CONCLUSION 受信時に `TsbpdTimeBase = T_NOW - HSREQ_TIMESTAMP` を計算し�
 - `start_time` が TSBPD 以外の用途（`last_ack_time` 初期値、`ReceivingRateEstimator`）で引き続き使用されていること
 - 既存の全テスト (`cargo test`) が通過すること
 - `CHANGES.md` の `## develop` セクションに `[FIX]` エントリが追加されていること
+
+## 解決方法
+
+1. `src/srt_receiver.rs` の `ReceiverBuffer` に `tsbpd_time_base: u64` フィールドを追加し、`new()` のシグネチャに引数を追加
+2. `src/srt_receiver.rs` の配信時刻計算（`receive`）を `self.start_time.as_micros() + packet.timestamp` から `self.tsbpd_time_base + packet.timestamp` に修正
+3. `src/srt_receiver.rs` の `drop_too_late` のドロップ判定を `self.start_time.as_micros() + self.tsbpd_delay_us` から `self.tsbpd_time_base + self.tsbpd_delay_us` に修正
+4. `src/srt_receiver.rs` の `start_time` フィールドを削除（TSBPD 計算から参照がなくなったため未使用になった）
+5. `src/srt_connection.rs` の `handle_handshake` で `pkt.timestamp` を `handle_handshake_caller` / `handle_handshake_listener` に伝搬
+6. CONCLUSION 受信時に `TsbpdTimeBase = T_NOW - HSREQ_TIMESTAMP` を計算し、`init_buffers` 経由で `ReceiverBuffer` に渡す
+7. `src/srt_receiver.rs` に TSBPD の仕様値を直接検証する単体テストを 3 件追加
+8. `CHANGES.md` に `[FIX]` エントリを追加

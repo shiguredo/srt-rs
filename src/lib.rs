@@ -1,7 +1,6 @@
 mod buf;
 mod crypto;
 mod error;
-mod srt_congestion;
 mod srt_connection;
 mod srt_handshake;
 mod srt_packet;
@@ -13,7 +12,6 @@ mod time;
 pub use buf::{ByteSliceExt, VecExt};
 pub use crypto::{CryptoContext, KeyFlag, KeyLength, KmRefreshState};
 pub use error::{Error, ErrorKind};
-pub use srt_congestion::{AckInfo, BandwidthMode, CongestionControl, LiveCc};
 pub use srt_connection::{
     ConnectionEvent, ConnectionOptions, ConnectionOutput, ConnectionRole, ConnectionState,
     SrtConnection, TimerId,

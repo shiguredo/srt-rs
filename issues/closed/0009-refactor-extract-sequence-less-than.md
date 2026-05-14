@@ -2,6 +2,7 @@
 
 - Priority: Low
 - Created: 2026-05-14
+- Completed: 2026-05-14
 - Model: DeepSeek V4 Pro
 - Branch: feature/refactor-extract-sequence-less-than
 
@@ -35,3 +36,8 @@
 - `sequence_less_than` / `sequence_greater_than` が `src/srt_packet.rs` に 1 箇所のみ存在すること
 - すべての呼び出し元が正しく import されていること
 - `cargo test` で全テストが通過すること
+
+## 解決方法
+
+1. `sequence_less_than` と `sequence_greater_than` を `src/srt_packet.rs` に `pub(crate)` で移動
+2. `src/srt_sender.rs` と `src/srt_receiver.rs` の重複定義を削除し、`crate::srt_packet` から import するよう修正

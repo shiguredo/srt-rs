@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-05-14
+- Completed: 2026-05-14
 - Model: DeepSeek V4 Pro
 - Branch: feature/fix-drop-too-late-individual-timestamps
 
@@ -62,3 +63,10 @@ TLPKTDROP_THRESHOLD は仕様（TLPKTDROP_THRESHOLD, 2179-2185 行目）に従�
 - `TLPKTDROP_THRESHOLD` が `1.25 * tsbpd_delay_us` かつ最低 1 秒であること
 - `cargo test` で全テストが通過すること
 - `CHANGES.md` の `## develop` セクションに `[FIX]` エントリが追加されていること
+
+## 解決方法
+
+1. `drop_too_late` の filter クロージャで、シーケンス番号から `ReceivedPacket` を検索し、存在すればその `delivery_time` を、なければ `tsbpd_time_base + tsbpd_delay_us` から推定するよう修正
+2. `TLPKTDROP_THRESHOLD = max(1.25 * tsbpd_delay_us, 1_000_000)` を導入
+3. `src/srt_receiver.rs` に `test_drop_too_late_individual_delivery` テストを追加
+4. `CHANGES.md` に `[FIX]` エントリを追加

@@ -2,6 +2,7 @@
 
 - Priority: Low
 - Created: 2026-05-14
+- Completed: 2026-05-14
 - Model: DeepSeek V4 Pro
 - Branch: feature/refactor-extract-le-words-encoding
 
@@ -43,3 +44,8 @@ fn decode_le_words(data: &[u8]) -> Option<String> { ... }
 
 - 4 メソッドが共通の `encode_le_words` / `decode_le_words` を使用していること
 - `cargo test` で全テストが通過すること
+
+## 解決方法
+
+1. `encode_le_words` と `decode_le_words` の共通ユーティリティ関数を `src/srt_handshake.rs` に追加
+2. `add_sid_extension`、`get_sid_extension`、`add_congestion_extension`、`get_congestion_extension` の実装を共通関数を使う形に書き換え

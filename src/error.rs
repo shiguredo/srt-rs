@@ -5,9 +5,6 @@ use std::panic::Location;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum ErrorKind {
-    /// 入力データの形式または構造が無効である
-    InvalidInput,
-
     /// データコンテンツが無効または破損している
     InvalidData,
 
@@ -16,12 +13,6 @@ pub enum ErrorKind {
 
     /// 提供されたバッファがエンコード/デコード結果を保持するのに小さすぎる
     InsufficientBuffer,
-
-    /// 操作またはデータ形式がサポートされていない
-    Unsupported,
-
-    /// プロトコル違反が検出された
-    ProtocolViolation,
 
     /// 暗号化/復号化エラー
     CryptoError,
@@ -45,9 +36,6 @@ pub struct Error {
     ///
     /// バックトレースは `RUST_BACKTRACE` 環境変数が設定されていない場合には取得されない
     pub backtrace: Backtrace,
-
-    /// SRT ハンドシェイク拒否理由コード（該当する場合）
-    pub srt_rejection_code: Option<u32>,
 }
 
 impl Error {
@@ -65,14 +53,7 @@ impl Error {
             reason: reason.into(),
             location: Location::caller(),
             backtrace: Backtrace::capture(),
-            srt_rejection_code: None,
         }
-    }
-
-    #[track_caller]
-    #[allow(dead_code)]
-    pub(crate) fn invalid_input<T: Into<String>>(reason: T) -> Self {
-        Self::with_reason(ErrorKind::InvalidInput, reason)
     }
 
     #[track_caller]
@@ -86,30 +67,16 @@ impl Error {
     }
 
     #[track_caller]
-    #[allow(dead_code)]
-    pub(crate) fn unsupported<T: Into<String>>(reason: T) -> Self {
-        Self::with_reason(ErrorKind::Unsupported, reason)
-    }
-
-    #[track_caller]
     pub(crate) fn insufficient_buffer() -> Self {
         Self::new(ErrorKind::InsufficientBuffer)
     }
 
     #[track_caller]
-    #[allow(dead_code)]
-    pub(crate) fn protocol_violation<T: Into<String>>(reason: T) -> Self {
-        Self::with_reason(ErrorKind::ProtocolViolation, reason)
-    }
-
-    #[track_caller]
-    #[allow(dead_code)]
     pub(crate) fn crypto_error<T: Into<String>>(reason: T) -> Self {
         Self::with_reason(ErrorKind::CryptoError, reason)
     }
 
     #[track_caller]
-    #[allow(dead_code)]
     pub(crate) fn handshake_rejected<T: Into<String>>(reason: T) -> Self {
         Self::with_reason(ErrorKind::HandshakeRejected, reason)
     }
@@ -122,13 +89,6 @@ impl Error {
             Ok(())
         }
     }
-
-    /// SRT ハンドシェイク拒否理由コードを設定する
-    #[allow(dead_code)]
-    pub fn with_srt_rejection_code(mut self, code: u32) -> Self {
-        self.srt_rejection_code = Some(code);
-        self
-    }
 }
 
 impl std::fmt::Debug for Error {
@@ -140,9 +100,6 @@ impl std::fmt::Debug for Error {
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}: {}", self.kind, self.reason)?;
-        if let Some(code) = self.srt_rejection_code {
-            write!(f, " (SRT rejection code: {code:#x})")?;
-        }
         write!(f, " (at {}:{})", self.location.file(), self.location.line())?;
         if self.backtrace.status() == BacktraceStatus::Captured {
             write!(f, "\n\nBacktrace:\n{}", self.backtrace)?;

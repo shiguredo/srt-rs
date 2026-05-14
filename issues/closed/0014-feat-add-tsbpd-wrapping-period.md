@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-05-14
+- Completed: 2026-05-14
 - Model: DeepSeek V4 Pro
 - Branch: feature/add-tsbpd-wrapping-period
 
@@ -49,3 +50,9 @@ SRT 仕様（TSBPD wrapping period, 2152-2166 行目）では、TSBPD タイム�
 - `MAX_TIMESTAMP` 到達時に `TsbpdTimeBase` が正しく再計算されること
 - wrapping period 境界のテストが追加されていること
 - `cargo test` で全テストが通過すること
+
+## 解決方法
+
+1. `MAX_TIMESTAMP` 定数 (`0xFFFF_FFFF`) とラップアラウンド期間定数を定義
+2. `ReceiverBuffer` に `wrapping_period_active: bool` フィールドを追加
+3. `receive()` メソッド内でタイムスタンプのラップアラウンドを検出し、`TsbpdTimeBase += MAX_TIMESTAMP + 1` を実行するロジックを追加

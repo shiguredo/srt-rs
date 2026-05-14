@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-05-14
+- Completed: 2026-05-14
 - Model: DeepSeek V4 Pro
 - Branch: feature/fix-handle-ack-wrap-around-buffer-leak
 
@@ -52,3 +53,9 @@ let to_remove: Vec<u32> = self
 - ラップアラウンド境界のテストが追加されていること
 - `cargo test` で全テストが通過すること
 - `CHANGES.md` の `## develop` セクションに `[FIX]` エントリが追加されていること
+
+## 解決方法
+
+1. `src/srt_sender.rs` の `handle_ack` で `take_while` を `filter` に置き換え、全要素が巡回されるよう修正
+2. `src/srt_sender.rs` にラップアラウンド境界の単体テストを追加
+3. `CHANGES.md` に `[FIX]` エントリを追加

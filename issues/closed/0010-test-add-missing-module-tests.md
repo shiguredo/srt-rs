@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-05-14
+- Completed: 2026-05-14
 - Model: DeepSeek V4 Pro
 - Branch: feature/add-missing-module-tests
 
@@ -34,3 +35,10 @@ PBT と単体テストを AGENTS.md の役割分担に従って作成する。
 
 - 上記 4 つのテストファイルが作成されていること
 - 全テストが `cargo test` で通過すること
+
+## 解決方法
+
+1. `pbt/tests/prop_buf.rs` を作成し、u16/u32/u64/bytes の write/read ラウンドトリップ PBT を追加
+2. `tests/test_buf.rs` を作成し、無効な UTF-8 入力のエラーパステストを追加
+3. `tests/test_error.rs` を作成し、バッファサイズ境界値テストを追加
+4. `pbt/tests/prop_time.rs` を作成し、Timestamp の from_micros/as_micros ラウンドトリップ PBT を追加

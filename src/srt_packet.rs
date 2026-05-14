@@ -107,7 +107,7 @@ pub struct DataPacket {
     /// 順序フラグ (O, 1 bit)
     pub order_flag: bool,
     /// 暗号化キーフラグ (KK, 2 bits)
-    /// 00b: 暗号化なし, 01b: 奇数キー, 10b: 偶数キー
+    /// 00b: 暗号化なし, 01b: 偶数キー, 10b: 奇数キー
     pub encryption_flag: u8,
     /// 再送信フラグ (R, 1 bit)
     pub retransmitted: bool,
@@ -384,4 +384,15 @@ mod tests {
         assert_eq!(PacketPosition::from_bits(0b01), PacketPosition::Last);
         assert_eq!(PacketPosition::from_bits(0b11), PacketPosition::Single);
     }
+}
+
+/// シーケンス番号の比較 (ラップアラウンド対応, 31-bit)
+pub(crate) fn sequence_less_than(a: u32, b: u32) -> bool {
+    let diff = b.wrapping_sub(a) & 0x7FFF_FFFF;
+    diff > 0 && diff < 0x4000_0000
+}
+
+/// シーケンス番号の比較 (ラップアラウンド対応, 31-bit)
+pub(crate) fn sequence_greater_than(a: u32, b: u32) -> bool {
+    sequence_less_than(b, a)
 }

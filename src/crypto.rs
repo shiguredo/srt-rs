@@ -66,17 +66,17 @@ impl KeyLength {
 pub enum KeyFlag {
     /// 偶数鍵
     #[default]
-    Even = 0b10,
+    Even = 0b01,
     /// 奇数鍵
-    Odd = 0b01,
+    Odd = 0b10,
 }
 
 impl KeyFlag {
     /// KK フィールド値から取得
     pub fn from_kk_field(value: u8) -> Option<Self> {
         match value & 0b11 {
-            0b01 => Some(Self::Odd),
-            0b10 => Some(Self::Even),
+            0b01 => Some(Self::Even),
+            0b10 => Some(Self::Odd),
             _ => None,
         }
     }
@@ -370,6 +370,10 @@ fn wrap_sek(kek: &[u8], sek: &[u8], key_length: KeyLength) -> Result<Vec<u8>, Er
 
 /// SEK を AES Key Wrap でアンラップ
 fn unwrap_sek(kek: &[u8], wrapped: &[u8], key_length: KeyLength) -> Result<Vec<u8>, Error> {
+    if wrapped.len() < 8 {
+        return Err(Error::crypto_error("wrapped key too short"));
+    }
+
     let algorithm = match key_length {
         KeyLength::Aes128 => &KW_AES_128,
         KeyLength::Aes256 => &KW_AES_256,
@@ -533,6 +537,16 @@ mod tests {
     }
 
     #[test]
+    fn test_key_flag_kk_field_mapping() {
+        assert_eq!(KeyFlag::Even.to_kk_field(), 0b01);
+        assert_eq!(KeyFlag::Odd.to_kk_field(), 0b10);
+        assert_eq!(KeyFlag::from_kk_field(0b01), Some(KeyFlag::Even));
+        assert_eq!(KeyFlag::from_kk_field(0b10), Some(KeyFlag::Odd));
+        assert_eq!(KeyFlag::from_kk_field(0b00), None);
+        assert_eq!(KeyFlag::from_kk_field(0b11), None);
+    }
+
+    #[test]
     fn test_km_refresh_encrypt_with_key_switch() {
         let salt = [0u8; 16];
         let sek = vec![0x42u8; 16];
@@ -560,5 +574,13 @@ mod tests {
         let mut payload3 = b"test data 3".to_vec();
         let key3 = crypto.encrypt(3, &mut payload3).unwrap();
         assert_eq!(key3, KeyFlag::Odd);
+    }
+
+    #[test]
+    fn test_unwrap_sek_short_input() {
+        let kek = vec![0x42u8; 16];
+
+        assert!(unwrap_sek(&kek, &[], KeyLength::Aes128).is_err());
+        assert!(unwrap_sek(&kek, &[0; 7], KeyLength::Aes128).is_err());
     }
 }

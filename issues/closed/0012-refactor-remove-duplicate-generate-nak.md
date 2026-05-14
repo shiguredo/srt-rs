@@ -2,6 +2,7 @@
 
 - Priority: Low
 - Created: 2026-05-14
+- Completed: 2026-05-14
 - Model: DeepSeek V4 Pro
 - Branch: feature/refactor-remove-duplicate-generate-nak
 
@@ -35,3 +36,8 @@
 
 - `generate_nak` が削除されていること
 - `cargo test` で全テストが通過すること
+
+## 解決方法
+
+1. `src/srt_receiver.rs` の `generate_nak` メソッドを削除（`generate_periodic_nak` と重複）
+2. `src/srt_receiver.rs` と `pbt/tests/prop_receiver.rs` のテストで `generate_nak()` 呼び出しを `generate_periodic_nak()` に置き換え

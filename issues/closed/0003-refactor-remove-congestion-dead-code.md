@@ -2,6 +2,7 @@
 
 - Priority: Low
 - Created: 2026-05-14
+- Completed: 2026-05-14
 - Model: DeepSeek V4 Pro
 - Branch: feature/change-remove-congestion-dead-code
 
@@ -71,3 +72,10 @@ issue #0016 (`fmt-fix-english-comments-and-test-messages`) の修正対象 7, 8 
 - `cargo test` で全テストが通過すること
 - `CHANGES.md` の `## develop` セクションに `[CHANGE]` エントリが追加されていること
 - issue #0016 の修正対象 7, 8（`srt_congestion.rs` 参照箇所）が削除されていること
+
+## 解決方法
+
+1. `src/srt_congestion.rs` を全削除
+2. `src/lib.rs` の `mod srt_congestion;` を削除
+3. `src/lib.rs` の `pub use srt_congestion::{AckInfo, BandwidthMode, CongestionControl, LiveCc};` を削除
+4. `CHANGES.md` の `### misc` に `[CHANGE]` エントリを追加

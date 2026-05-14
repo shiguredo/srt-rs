@@ -13,7 +13,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::srt_packet::DataPacket;
+use crate::srt_packet::{sequence_less_than, sequence_greater_than, DataPacket};
 use crate::time::Timestamp;
 
 /// Light ACK 送信間隔 (パケット数)
@@ -27,6 +27,16 @@ const MAX_ACK_TIMESTAMPS: usize = 16;
 
 /// Link Capacity 推定に使用するサンプル数
 const LINK_CAPACITY_SAMPLES: usize = 16;
+
+/// タイムスタンプの最大値 (32-bit)
+const MAX_TIMESTAMP: u64 = 0xFFFF_FFFF;
+
+/// TSBPD ラップアラウンド期間: MAX_TIMESTAMP 到達の 30 秒前から開始
+const WRAPPING_PERIOD_START: u64 = MAX_TIMESTAMP - 30_000_000;
+
+/// TSBPD ラップアラウンド期間: タイムスタンプがこの値を超えたら終了
+const WRAPPING_PERIOD_END_MIN: u64 = 30_000_000;
+const WRAPPING_PERIOD_END_MAX: u64 = 60_000_000;
 
 /// ACK 送信時刻の追跡 (RTT 計算用)
 #[derive(Debug)]
@@ -294,8 +304,11 @@ pub struct ReceiverBuffer {
     /// TSBPD 有効かどうか
     tsbpd_enabled: bool,
 
-    /// セッション開始時刻
-    start_time: Timestamp,
+    /// TSBPD 時刻基準 (TsbpdTimeBase = T_NOW - HSREQ_TIMESTAMP, マイクロ秒)
+    tsbpd_time_base: u64,
+
+    /// TSBPD ラップアラウンド期間中かどうか
+    wrapping_period_active: bool,
 
     /// RTT (マイクロ秒)
     rtt: u32,
@@ -336,7 +349,7 @@ pub struct ReceiverBuffer {
 
 impl ReceiverBuffer {
     /// 新しい受信バッファを作成
-    pub fn new(initial_seq: u32, tsbpd_delay_ms: u16, start_time: Timestamp) -> Self {
+    pub fn new(initial_seq: u32, tsbpd_delay_ms: u16, start_time: Timestamp, tsbpd_time_base: u64) -> Self {
         Self {
             packets: BTreeMap::new(),
             expected_seq: initial_seq,
@@ -347,7 +360,8 @@ impl ReceiverBuffer {
             ack_number: 1,
             tsbpd_delay_us: tsbpd_delay_ms as u64 * 1000,
             tsbpd_enabled: true,
-            start_time,
+            tsbpd_time_base,
+            wrapping_period_active: false,
             rtt: 100_000, // 初期 RTT: 100ms
             rtt_var: 50_000,
             max_buffer_size: 8192,
@@ -412,10 +426,25 @@ impl ReceiverBuffer {
         }
         self.last_transit = Some(transit);
 
+        // TSBPD ラップアラウンド期間のチェック
+        if self.tsbpd_enabled {
+            let ts = packet.timestamp as u64;
+            if ts >= WRAPPING_PERIOD_START && !self.wrapping_period_active {
+                self.wrapping_period_active = true;
+            }
+            if self.wrapping_period_active
+                && ts >= WRAPPING_PERIOD_END_MIN
+                && ts <= WRAPPING_PERIOD_END_MAX
+            {
+                self.tsbpd_time_base += MAX_TIMESTAMP + 1;
+                self.wrapping_period_active = false;
+            }
+        }
+
         // TSBPD 配信時刻を計算
         let delivery_time = if self.tsbpd_enabled {
             // パケットタイムスタンプ + TSBPD 遅延
-            let pkt_time = self.start_time.as_micros() + packet.timestamp as u64;
+            let pkt_time = self.tsbpd_time_base + packet.timestamp as u64;
             Timestamp::from_micros(pkt_time + self.tsbpd_delay_us)
         } else {
             now
@@ -506,10 +535,11 @@ impl ReceiverBuffer {
         self.last_ack_time = now;
         self.last_ack_seq = self.expected_seq;
         self.packets_since_ack = 0;
-        self.ack_number = self.ack_number.wrapping_add(1);
 
-        // ACK 送信時刻を記録 (RTT 計算用)
-        self.ack_timestamps.record(self.ack_number, now);
+        if !is_light {
+            self.ack_number = self.ack_number.wrapping_add(1);
+            self.ack_timestamps.record(self.ack_number, now);
+        }
 
         // 受信レートとリンク容量を計算
         let (receiving_rate, recv_rate) = self.rate_estimator.calculate_rates(now);
@@ -525,17 +555,6 @@ impl ReceiverBuffer {
             recv_rate,
             is_light,
         }
-    }
-
-    /// NAK を生成 (損失リストがある場合)
-    pub fn generate_nak(&mut self) -> Option<NakPacket> {
-        if self.loss_list.is_empty() {
-            return None;
-        }
-
-        Some(NakPacket {
-            loss_list: self.loss_list.clone(),
-        })
     }
 
     /// Periodic NAK を生成
@@ -585,17 +604,22 @@ impl ReceiverBuffer {
             return Vec::new();
         }
 
+        let tlpktdrop_threshold = ((self.tsbpd_delay_us as u128 * 125 / 100) as u64)
+            .max(1_000_000); // 最低 1 秒
+
         let mut dropped = Vec::new();
 
-        // 配信時刻を過ぎたが、前にギャップがあるパケットをドロップ
         let expired: Vec<u32> = self
             .loss_list
             .iter()
             .copied()
-            .filter(|&_seq| {
-                // このシーケンス番号の配信予定時刻を推定
-                let estimated_delivery = self.start_time.as_micros() + self.tsbpd_delay_us;
-                now.as_micros() > estimated_delivery + self.tsbpd_delay_us
+            .filter(|&seq| {
+                let estimated_delivery = self
+                    .packets
+                    .get(&seq)
+                    .map(|p| p.delivery_time.as_micros())
+                    .unwrap_or_else(|| self.tsbpd_time_base + self.tsbpd_delay_us);
+                now.as_micros() > estimated_delivery + tlpktdrop_threshold
             })
             .collect();
 
@@ -671,17 +695,6 @@ pub struct ReceiverStats {
     pub jitter: u32,
 }
 
-/// シーケンス番号の比較 (ラップアラウンド対応)
-fn sequence_less_than(a: u32, b: u32) -> bool {
-    let diff = b.wrapping_sub(a) & 0x7FFF_FFFF;
-    diff > 0 && diff < 0x4000_0000
-}
-
-/// シーケンス番号の比較 (ラップアラウンド対応)
-fn sequence_greater_than(a: u32, b: u32) -> bool {
-    sequence_less_than(b, a)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -703,14 +716,14 @@ mod tests {
     #[test]
     fn test_receiver_buffer_new() {
         let start = Timestamp::from_micros(0);
-        let buf = ReceiverBuffer::new(1000, 120, start);
+        let buf = ReceiverBuffer::new(1000, 120, start, 0);
         assert_eq!(buf.expected_sequence(), 1000);
     }
 
     #[test]
     fn test_receiver_buffer_receive_in_order() {
         let start = Timestamp::from_micros(0);
-        let mut buf = ReceiverBuffer::new(1000, 120, start);
+        let mut buf = ReceiverBuffer::new(1000, 120, start, 0);
         buf.set_tsbpd_enabled(false);
 
         let now = Timestamp::from_micros(1000);
@@ -728,7 +741,7 @@ mod tests {
     #[test]
     fn test_receiver_buffer_loss_detection() {
         let start = Timestamp::from_micros(0);
-        let mut buf = ReceiverBuffer::new(1000, 120, start);
+        let mut buf = ReceiverBuffer::new(1000, 120, start, 0);
         buf.set_tsbpd_enabled(false);
 
         let now = Timestamp::from_micros(1000);
@@ -746,7 +759,7 @@ mod tests {
     #[test]
     fn test_receiver_buffer_duplicate() {
         let start = Timestamp::from_micros(0);
-        let mut buf = ReceiverBuffer::new(1000, 120, start);
+        let mut buf = ReceiverBuffer::new(1000, 120, start, 0);
         buf.set_tsbpd_enabled(false);
 
         let now = Timestamp::from_micros(1000);
@@ -763,7 +776,7 @@ mod tests {
     #[test]
     fn test_receiver_buffer_pop_ready() {
         let start = Timestamp::from_micros(0);
-        let mut buf = ReceiverBuffer::new(1000, 120, start);
+        let mut buf = ReceiverBuffer::new(1000, 120, start, 0);
         buf.set_tsbpd_enabled(false);
 
         let now = Timestamp::from_micros(1000);
@@ -783,7 +796,7 @@ mod tests {
     #[test]
     fn test_receiver_buffer_ack_generation() {
         let start = Timestamp::from_micros(0);
-        let mut buf = ReceiverBuffer::new(1000, 120, start);
+        let mut buf = ReceiverBuffer::new(1000, 120, start, 0);
 
         let now = Timestamp::from_micros(1000);
 
@@ -797,7 +810,7 @@ mod tests {
     #[test]
     fn test_receiver_buffer_nak_generation() {
         let start = Timestamp::from_micros(0);
-        let mut buf = ReceiverBuffer::new(1000, 120, start);
+        let mut buf = ReceiverBuffer::new(1000, 120, start, 0);
         buf.set_tsbpd_enabled(false);
 
         let now = Timestamp::from_micros(1000);
@@ -805,7 +818,7 @@ mod tests {
         buf.receive(make_packet(1000, 100), now);
         buf.receive(make_packet(1002, 300), now); // 1001 欠落
 
-        let nak = buf.generate_nak();
+        let nak = buf.generate_periodic_nak();
         assert!(nak.is_some());
         assert_eq!(nak.unwrap().loss_list, vec![1001]);
     }
@@ -866,10 +879,10 @@ mod tests {
 
         // 約 1000 packets/sec を期待
         // EWMA により初回は 1/8 の重みなので、完全な値にはならない
-        assert!(packet_rate > 0, "packet_rate should be > 0");
+        assert!(packet_rate > 0, "パケットレートが 0 より大きいこと");
 
         // バイトレートも計算される
-        assert!(byte_rate > 0, "byte_rate should be > 0");
+        assert!(byte_rate > 0, "バイトレートが 0 より大きいこと");
     }
 
     #[test]
@@ -900,7 +913,7 @@ mod tests {
 
         // 約 10000 packets/sec を期待
         // Packet Pair Technique で下位 25% を使うため、値は変動する
-        assert!(capacity > 0, "capacity should be > 0");
+        assert!(capacity > 0, "容量が 0 より大きいこと");
     }
 
     #[test]
@@ -931,7 +944,7 @@ mod tests {
     #[test]
     fn test_rtt_calculation_with_ack_timestamps() {
         let start = Timestamp::from_micros(0);
-        let mut buf = ReceiverBuffer::new(1000, 120, start);
+        let mut buf = ReceiverBuffer::new(1000, 120, start, 0);
         buf.set_tsbpd_enabled(false);
 
         // パケットを受信
@@ -951,13 +964,13 @@ mod tests {
         let stats = buf.stats();
         // 初期 RTT は 100ms (100000μs) なので、
         // RTT = 7/8 * 100000 + 1/8 * 50000 = 87500 + 6250 = 93750
-        assert!(stats.rtt > 0, "RTT should be calculated");
+        assert!(stats.rtt > 0, "RTT が計算されていること");
     }
 
     #[test]
     fn test_ack_includes_recv_rate() {
         let start = Timestamp::from_micros(0);
-        let mut buf = ReceiverBuffer::new(1000, 120, start);
+        let mut buf = ReceiverBuffer::new(1000, 120, start, 0);
         buf.set_tsbpd_enabled(false);
 
         // パケットを複数回受信
@@ -983,7 +996,7 @@ mod tests {
     #[test]
     fn test_total_bytes_received() {
         let start = Timestamp::from_micros(0);
-        let mut buf = ReceiverBuffer::new(1000, 120, start);
+        let mut buf = ReceiverBuffer::new(1000, 120, start, 0);
         buf.set_tsbpd_enabled(false);
 
         let now = Timestamp::from_micros(1000);
@@ -1002,7 +1015,7 @@ mod tests {
     #[test]
     fn test_loss_rate_calculation() {
         let start = Timestamp::from_micros(0);
-        let mut buf = ReceiverBuffer::new(1000, 120, start);
+        let mut buf = ReceiverBuffer::new(1000, 120, start, 0);
         buf.set_tsbpd_enabled(false);
 
         let now = Timestamp::from_micros(1000);
@@ -1028,7 +1041,7 @@ mod tests {
     #[test]
     fn test_loss_rate_zero() {
         let start = Timestamp::from_micros(0);
-        let mut buf = ReceiverBuffer::new(1000, 120, start);
+        let mut buf = ReceiverBuffer::new(1000, 120, start, 0);
         buf.set_tsbpd_enabled(false);
 
         let now = Timestamp::from_micros(1000);
@@ -1047,7 +1060,7 @@ mod tests {
     #[test]
     fn test_jitter_calculation() {
         let start = Timestamp::from_micros(0);
-        let mut buf = ReceiverBuffer::new(1000, 120, start);
+        let mut buf = ReceiverBuffer::new(1000, 120, start, 0);
         buf.set_tsbpd_enabled(false);
 
         // タイムスタンプと到着時刻の差が一定の場合、ジッターは小さい
@@ -1074,10 +1087,129 @@ mod tests {
     #[test]
     fn test_jitter_no_packets() {
         let start = Timestamp::from_micros(0);
-        let buf = ReceiverBuffer::new(1000, 120, start);
+        let buf = ReceiverBuffer::new(1000, 120, start, 0);
 
         let stats = buf.stats();
         // パケットを受信していない場合、jitter は 0
         assert_eq!(stats.jitter, 0);
+    }
+
+    #[test]
+    fn test_tsbpd_delivery_time_uses_tsbpd_time_base() {
+        let start = Timestamp::from_micros(1_000_000); // T=1 秒
+        // TsbpdTimeBase = 500_000μs (RTT_0/2 = 250ms 相当)
+        let tsbpd_time_base = 500_000;
+        let mut buf = ReceiverBuffer::new(1000, 120, start, tsbpd_time_base);
+
+        let now = Timestamp::from_micros(1_000_000);
+        let pkt = make_packet(1000, 200_000); // PKT_TIMESTAMP = 200ms
+        buf.receive(pkt, now);
+
+        let delivered = buf.pop_ready(Timestamp::from_micros(1_500_000));
+        // delivery_time = tsbpd_time_base + PKT_TIMESTAMP + tsbpd_delay
+        //                = 500_000 + 200_000 + 120_000 = 820_000μs
+        // now=1_500_000 > 820_000 なので配送される
+        assert!(delivered.is_some());
+        assert_eq!(delivered.unwrap().sequence_number, 1000);
+    }
+
+    #[test]
+    fn test_tsbpd_delivery_not_ready_before_delay() {
+        let start = Timestamp::from_micros(1_000_000);
+        let tsbpd_time_base = 500_000;
+        let mut buf = ReceiverBuffer::new(1000, 120, start, tsbpd_time_base);
+
+        let now = Timestamp::from_micros(1_000_000);
+        let pkt = make_packet(1000, 200_000);
+        buf.receive(pkt, now);
+
+        // PKT_TIMESTAMP=200_000 + tsbpd_time_base=500_000 = 700_000
+        // tsbpd_delay=120_000, delivery_time = 820_000
+        // now=700_000 < 820_000 なので配送されない
+        let delivered = buf.pop_ready(Timestamp::from_micros(700_000));
+        assert!(delivered.is_none());
+    }
+
+    #[test]
+    fn test_drop_too_late_uses_tsbpd_time_base() {
+        let start = Timestamp::from_micros(1_000_000);
+        let tsbpd_time_base = 500_000;
+        let mut buf = ReceiverBuffer::new(1000, 120, start, tsbpd_time_base);
+
+        let now = Timestamp::from_micros(1_000_000);
+        // 1001 を受信して 1000 が損失として登録される
+        buf.receive(make_packet(1001, 200_000), now);
+
+        assert_eq!(buf.loss_list, vec![1000]);
+
+        // TLPKTDROP = max(1.25 * 120_000, 1_000_000) = 1_000_000μs
+        // estimated_delivery = 500_000 + 120_000 = 620_000
+        // now = 2_000_000 > 620_000 + 1_000_000 = 1_620_000 なので削除される
+        let dropped = buf.drop_too_late(Timestamp::from_micros(2_000_000));
+        assert_eq!(dropped, vec![1000]);
+    }
+
+    #[test]
+    fn test_drop_too_late_individual_delivery() {
+        let start = Timestamp::from_micros(1_000_000);
+        let tsbpd_time_base = 500_000;
+        let mut buf = ReceiverBuffer::new(1000, 500, start, tsbpd_time_base);
+        // tsbpd_delay = 500ms, tsbpd_delay_us = 500_000
+
+        let now = Timestamp::from_micros(1_000_000);
+        // 1000 を受信 (delivery_time = 500_000 + 100_000 + 500_000 = 1_100_000)
+        buf.receive(make_packet(1000, 100_000), now);
+        // 1002 を受信して 1001 が損失として登録される
+        // (1001 は未受信のため estimated_delivery = 500_000 + 500_000 = 1_000_000)
+        buf.receive(make_packet(1002, 300_000), now);
+
+        // TLPKTDROP = max(1.25 * 500_000, 1_000_000) = 1_000_000
+        // 1000: delivery = 1_100_000, 1_100_000 + 1_000_000 = 2_100_000
+        // 1001: estimated = 1_000_000, 1_000_000 + 1_000_000 = 2_000_000
+        // now = 2_050_000: 1000 は未到達、1001 は超過 → 1001 のみ削除
+        let dropped = buf.drop_too_late(Timestamp::from_micros(2_050_000));
+        assert_eq!(dropped, vec![1001]);
+        assert_eq!(buf.loss_list, Vec::<u32>::new());
+    }
+
+    #[test]
+    fn test_light_ack_does_not_increment_ack_number() {
+        let start = Timestamp::from_micros(0);
+        let mut buf = ReceiverBuffer::new(1000, 120, start, 0);
+        buf.set_tsbpd_enabled(false);
+
+        // 64 パケット受信して Light ACK 条件を満たす
+        let now = Timestamp::from_micros(0);
+        for i in 0..64 {
+            buf.receive(make_packet(1000 + i as u32, i as u32 * 100), now);
+        }
+
+        let ack_number_before = buf.ack_number();
+        let ack = buf.generate_ack(now);
+        assert!(ack.is_light);
+
+        // Light ACK では ack_number がインクリメントされない
+        assert_eq!(buf.ack_number(), ack_number_before);
+    }
+
+    #[test]
+    fn test_full_ack_increments_ack_number() {
+        let start = Timestamp::from_micros(0);
+        let mut buf = ReceiverBuffer::new(1000, 120, start, 0);
+        buf.set_tsbpd_enabled(false);
+
+        // 数パケット受信 (Light ACK 条件を満たさない)
+        let now = Timestamp::from_micros(0);
+        for i in 0..10 {
+            buf.receive(make_packet(1000 + i as u32, i as u32 * 100), now);
+        }
+
+        let ack_number_before = buf.ack_number();
+        // 定期 ACK 間隔 (10ms) 経過させる
+        let ack = buf.generate_ack(Timestamp::from_micros(10_000));
+        assert!(!ack.is_light);
+
+        // Full ACK では ack_number がインクリメントされる
+        assert_eq!(buf.ack_number(), ack_number_before + 1);
     }
 }

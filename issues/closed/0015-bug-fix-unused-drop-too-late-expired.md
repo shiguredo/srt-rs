@@ -2,6 +2,7 @@
 
 - Priority: Low
 - Created: 2026-05-14
+- Completed: 2026-05-14
 - Model: DeepSeek V4 Pro
 - Branch: feature/fix-unused-drop-too-late-expired
 
@@ -44,3 +45,8 @@ TLPKTDROP 機能を接続コードに統合する方針を取る。#0008 で `dr
 - `drop_too_late` と `drop_expired` が接続コードから呼び出されていること
 - TLPKTDROP フラグ有効時に正しくパケットがドロップされること
 - `cargo test` で全テストが通過すること
+
+## 解決方法
+
+1. `src/srt_connection.rs` の ACK タイマー処理（`TimerId::Ack`）で `drop_too_late` と `drop_expired` を呼び出すよう修正
+2. TLPKTDROP フラグ設定済みのため、常時実行される

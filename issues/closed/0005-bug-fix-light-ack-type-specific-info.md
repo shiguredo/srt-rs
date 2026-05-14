@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-05-14
+- Completed: 2026-05-14
 - Model: DeepSeek V4 Pro
 - Branch: feature/fix-light-ack-type-specific-info
 
@@ -89,3 +90,10 @@ let pkt = ControlPacket {
 - Full ACK 時の既存の動作が変更されていないこと
 - `cargo test` で全テストが通過すること
 - `CHANGES.md` の `## develop` セクションに `[FIX]` エントリが追加されていること
+
+## 解決方法
+
+1. `src/srt_receiver.rs` の `generate_ack` で `is_light` 時は `ack_number` のインクリメントと `ack_timestamps.record` をスキップするよう修正
+2. `src/srt_connection.rs` の `send_ack` で Light ACK 時の `type_specific_info` を `0` に設定するよう修正
+3. `src/srt_receiver.rs` に Light ACK / Full ACK の `ack_number` 挙動を検証する単体テストを 2 件追加
+4. `CHANGES.md` に `[FIX]` エントリを追加

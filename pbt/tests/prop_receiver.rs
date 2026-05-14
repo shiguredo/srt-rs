@@ -43,7 +43,7 @@ proptest! {
         start_time in 0u64..1_000_000u64,
     ) {
         let start = Timestamp::from_micros(start_time);
-        let buf = ReceiverBuffer::new(initial_seq, tsbpd_delay_ms, start);
+        let buf = ReceiverBuffer::new(initial_seq, tsbpd_delay_ms, start, 0);
         prop_assert_eq!(buf.expected_sequence(), initial_seq);
     }
 
@@ -53,7 +53,7 @@ proptest! {
         count in 1usize..50usize,
     ) {
         let start = Timestamp::from_micros(0);
-        let mut buf = ReceiverBuffer::new(initial_seq, 120, start);
+        let mut buf = ReceiverBuffer::new(initial_seq, 120, start, 0);
         buf.set_tsbpd_enabled(false);
 
         let now = Timestamp::from_micros(1000);
@@ -74,7 +74,7 @@ proptest! {
         gap in 1u32..10u32,
     ) {
         let start = Timestamp::from_micros(0);
-        let mut buf = ReceiverBuffer::new(initial_seq, 120, start);
+        let mut buf = ReceiverBuffer::new(initial_seq, 120, start, 0);
         buf.set_tsbpd_enabled(false);
 
         let now = Timestamp::from_micros(1000);
@@ -96,7 +96,7 @@ proptest! {
         initial_seq in 0u32..0x7FFF_FFFFu32,
     ) {
         let start = Timestamp::from_micros(0);
-        let mut buf = ReceiverBuffer::new(initial_seq, 120, start);
+        let mut buf = ReceiverBuffer::new(initial_seq, 120, start, 0);
         buf.set_tsbpd_enabled(false);
 
         let now = Timestamp::from_micros(1000);
@@ -115,7 +115,7 @@ proptest! {
         initial_seq in 10u32..0x7FFF_FFFFu32,
     ) {
         let start = Timestamp::from_micros(0);
-        let mut buf = ReceiverBuffer::new(initial_seq, 120, start);
+        let mut buf = ReceiverBuffer::new(initial_seq, 120, start, 0);
         buf.set_tsbpd_enabled(false);
 
         let now = Timestamp::from_micros(1000);
@@ -135,7 +135,7 @@ proptest! {
         count in 1usize..20usize,
     ) {
         let start = Timestamp::from_micros(0);
-        let mut buf = ReceiverBuffer::new(initial_seq, 120, start);
+        let mut buf = ReceiverBuffer::new(initial_seq, 120, start, 0);
         buf.set_tsbpd_enabled(false);
 
         let now = Timestamp::from_micros(1000);
@@ -162,7 +162,7 @@ proptest! {
         count in 1usize..20usize,
     ) {
         let start = Timestamp::from_micros(0);
-        let mut buf = ReceiverBuffer::new(initial_seq, 120, start);
+        let mut buf = ReceiverBuffer::new(initial_seq, 120, start, 0);
 
         let now = Timestamp::from_micros(1000);
 
@@ -182,7 +182,7 @@ proptest! {
         gap in 1u32..5u32,
     ) {
         let start = Timestamp::from_micros(0);
-        let mut buf = ReceiverBuffer::new(initial_seq, 120, start);
+        let mut buf = ReceiverBuffer::new(initial_seq, 120, start, 0);
         buf.set_tsbpd_enabled(false);
 
         let now = Timestamp::from_micros(1000);
@@ -195,7 +195,7 @@ proptest! {
         buf.receive(make_packet(skip_seq, 200), now);
 
         // NAK を生成
-        let nak = buf.generate_nak();
+        let nak = buf.generate_periodic_nak();
         prop_assert!(nak.is_some());
         prop_assert_eq!(nak.unwrap().loss_list.len(), gap as usize);
     }
@@ -205,7 +205,7 @@ proptest! {
         initial_seq in 0u32..0x7FFF_FFFFu32,
     ) {
         let start = Timestamp::from_micros(0);
-        let buf = ReceiverBuffer::new(initial_seq, 120, start);
+        let buf = ReceiverBuffer::new(initial_seq, 120, start, 0);
 
         // 初期 RTT 値
         prop_assert!(buf.rtt() > 0);
@@ -217,7 +217,7 @@ proptest! {
         initial_seq in 0u32..0x7FFF_FFFFu32,
     ) {
         let start = Timestamp::from_micros(0);
-        let buf = ReceiverBuffer::new(initial_seq, 120, start);
+        let buf = ReceiverBuffer::new(initial_seq, 120, start, 0);
 
         // NAK 間隔は最低 20ms
         let interval = buf.nak_interval();
@@ -230,7 +230,7 @@ proptest! {
         count in 1usize..20usize,
     ) {
         let start = Timestamp::from_micros(0);
-        let mut buf = ReceiverBuffer::new(initial_seq, 120, start);
+        let mut buf = ReceiverBuffer::new(initial_seq, 120, start, 0);
         buf.set_tsbpd_enabled(false);
 
         let now = Timestamp::from_micros(1000);
@@ -252,7 +252,7 @@ proptest! {
         payload_size in 1usize..1000usize,
     ) {
         let start = Timestamp::from_micros(0);
-        let mut buf = ReceiverBuffer::new(initial_seq, 120, start);
+        let mut buf = ReceiverBuffer::new(initial_seq, 120, start, 0);
         buf.set_tsbpd_enabled(false);
 
         let now = Timestamp::from_micros(1000);
@@ -269,7 +269,7 @@ proptest! {
         initial_seq in 0u32..0x7FFF_FFFFu32,
     ) {
         let start = Timestamp::from_micros(0);
-        let buf = ReceiverBuffer::new(initial_seq, 120, start);
+        let buf = ReceiverBuffer::new(initial_seq, 120, start, 0);
 
         // 直後は ACK 不要
         let now = Timestamp::from_micros(1000);
@@ -285,7 +285,7 @@ proptest! {
         initial_seq in 0u32..0x7FFF_FF00u32,
     ) {
         let start = Timestamp::from_micros(0);
-        let mut buf = ReceiverBuffer::new(initial_seq, 120, start);
+        let mut buf = ReceiverBuffer::new(initial_seq, 120, start, 0);
         buf.set_tsbpd_enabled(false);
 
         let now = Timestamp::from_micros(1000);
@@ -300,7 +300,7 @@ proptest! {
         prop_assert!(losses.is_none());
 
         // NAK は空になる
-        let nak = buf.generate_nak();
+        let nak = buf.generate_periodic_nak();
         prop_assert!(nak.is_none());
     }
 
@@ -310,7 +310,7 @@ proptest! {
         rtt_sample in 1000u64..100_000u64,
     ) {
         let start = Timestamp::from_micros(0);
-        let mut buf = ReceiverBuffer::new(initial_seq, 120, start);
+        let mut buf = ReceiverBuffer::new(initial_seq, 120, start, 0);
         buf.set_tsbpd_enabled(false);
 
         let now = Timestamp::from_micros(1000);
@@ -337,7 +337,7 @@ proptest! {
         initial_seq in 0u32..0x7FFF_FF00u32,
     ) {
         let start = Timestamp::from_micros(0);
-        let mut buf = ReceiverBuffer::new(initial_seq, 120, start);
+        let mut buf = ReceiverBuffer::new(initial_seq, 120, start, 0);
         buf.set_tsbpd_enabled(false);
 
         let now = Timestamp::from_micros(1000);
@@ -347,7 +347,7 @@ proptest! {
         buf.receive(make_packet((initial_seq + 2) & 0x7FFF_FFFF, 300), now);
 
         // Periodic NAK も同じ内容
-        let nak1 = buf.generate_nak();
+        let nak1 = buf.generate_periodic_nak();
         let nak2 = buf.generate_periodic_nak();
 
         prop_assert!(nak1.is_some());
@@ -360,7 +360,7 @@ proptest! {
         initial_seq in 0u32..0x7FFF_FF00u32,
     ) {
         let start = Timestamp::from_micros(0);
-        let mut buf = ReceiverBuffer::new(initial_seq, 120, start);
+        let mut buf = ReceiverBuffer::new(initial_seq, 120, start, 0);
         buf.set_tsbpd_enabled(false);
 
         // タイムスタンプと到着時刻の差が一定

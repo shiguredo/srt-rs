@@ -308,7 +308,7 @@ impl SrtConnection {
     }
 
     /// 送信/受信バッファを初期化
-    fn init_buffers(&mut self, now: Timestamp, peer_initial_seq: u32) {
+    fn init_buffers(&mut self, now: Timestamp, peer_initial_seq: u32, tsbpd_time_base: u64) {
         self.sender = Some(SenderBuffer::new(
             self.initial_seq,
             DEFAULT_FLOW_WINDOW,
@@ -318,6 +318,7 @@ impl SrtConnection {
             peer_initial_seq,
             self.options.tsbpd_delay,
             now,
+            tsbpd_time_base,
         ));
         self.last_ack_time = Some(now);
         self.last_nak_time = Some(now);
@@ -406,8 +407,13 @@ impl SrtConnection {
                 if self.state == ConnectionState::Connected {
                     self.send_ack(now);
 
-                    // TSBPD: 配信可能パケットをチェック
+                    // TLPKTDROP: 期限切れパケットを削除
                     if let Some(receiver) = self.receiver.as_mut() {
+                        for seq in receiver.drop_too_late(now) {
+                            if let Some(sender) = self.sender.as_mut() {
+                                sender.handle_ack(seq);
+                            }
+                        }
                         while let Some(ready_pkt) = receiver.pop_ready(now) {
                             self.event_queue.push_back(ConnectionEvent::DataReceived {
                                 payload: ready_pkt.payload,
@@ -415,6 +421,10 @@ impl SrtConnection {
                                 timestamp: ready_pkt.timestamp,
                             });
                         }
+                    }
+
+                    if let Some(sender) = self.sender.as_mut() {
+                        let _ = sender.drop_expired(now);
                     }
 
                     // 次の ACK タイマー設定 (10ms)
@@ -589,7 +599,7 @@ impl SrtConnection {
     }
 
     // ========================================================================
-    // Private methods
+    // プライベートメソッド
     // ========================================================================
 
     fn set_state(&mut self, new_state: ConnectionState) {
@@ -695,14 +705,15 @@ impl SrtConnection {
         let hs = HandshakePacket::decode(&pkt)?;
 
         match self.role {
-            ConnectionRole::Caller => self.handle_handshake_caller(hs, now),
-            ConnectionRole::Listener => self.handle_handshake_listener(hs, now),
+            ConnectionRole::Caller => self.handle_handshake_caller(hs, pkt.timestamp, now),
+            ConnectionRole::Listener => self.handle_handshake_listener(hs, pkt.timestamp, now),
         }
     }
 
     fn handle_handshake_caller(
         &mut self,
         hs: HandshakePacket,
+        hsreq_timestamp: u32,
         now: Timestamp,
     ) -> Result<(), Error> {
         match hs.handshake_type {
@@ -782,8 +793,11 @@ impl SrtConnection {
                 self.set_state(ConnectionState::Connected);
                 self.start_time = Some(now);
 
+                // TSBPD 時刻基準を計算
+                let tsbpd_time_base = now.as_micros().saturating_sub(hsreq_timestamp as u64);
+
                 // バッファ初期化
-                self.init_buffers(now, hs.initial_packet_seq);
+                self.init_buffers(now, hs.initial_packet_seq, tsbpd_time_base);
 
                 // ハンドシェイクタイマークリア
                 self.output_queue.push_back(ConnectionOutput::ClearTimer {
@@ -804,6 +818,7 @@ impl SrtConnection {
     fn handle_handshake_listener(
         &mut self,
         hs: HandshakePacket,
+        hsreq_timestamp: u32,
         now: Timestamp,
     ) -> Result<(), Error> {
         match hs.handshake_type {
@@ -862,8 +877,11 @@ impl SrtConnection {
                 self.set_state(ConnectionState::Connected);
                 self.start_time = Some(now);
 
+                // TSBPD 時刻基準を計算
+                let tsbpd_time_base = now.as_micros().saturating_sub(hsreq_timestamp as u64);
+
                 // バッファ初期化
-                self.init_buffers(now, hs.initial_packet_seq);
+                self.init_buffers(now, hs.initial_packet_seq, tsbpd_time_base);
 
                 // タイマー設定
                 self.setup_connection_timers();
@@ -1110,7 +1128,7 @@ impl SrtConnection {
         let pkt = ControlPacket {
             control_type: ControlType::Ack,
             subtype: 0,
-            type_specific_info: receiver.ack_number(),
+            type_specific_info: if ack_info.is_light { 0 } else { receiver.ack_number() },
             timestamp: self.relative_timestamp(now),
             dest_socket_id: self.peer_socket_id,
             control_info,
