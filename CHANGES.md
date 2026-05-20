@@ -28,6 +28,8 @@
 
 ### misc
 
+- [UPDATE] CI / Release ワークフローの Slack 通知を shiguredo/github-actions の slack-notify に移行する
+  - @voluntas
 - [CHANGE] sequence_less_than / sequence_greater_than を srt_packet.rs に集約する
   - @voluntas
 - [CHANGE] 未使用の srt_congestion モジュール (AckInfo, BandwidthMode, CongestionControl, LiveCc) を削除する
