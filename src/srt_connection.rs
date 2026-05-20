@@ -1128,7 +1128,11 @@ impl SrtConnection {
         let pkt = ControlPacket {
             control_type: ControlType::Ack,
             subtype: 0,
-            type_specific_info: if ack_info.is_light { 0 } else { receiver.ack_number() },
+            type_specific_info: if ack_info.is_light {
+                0
+            } else {
+                receiver.ack_number()
+            },
             timestamp: self.relative_timestamp(now),
             dest_socket_id: self.peer_socket_id,
             control_info,

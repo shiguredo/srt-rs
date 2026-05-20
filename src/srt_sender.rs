@@ -11,7 +11,7 @@
 
 use std::collections::{BTreeMap, VecDeque};
 
-use crate::srt_packet::{sequence_less_than, DataPacket, PacketPosition};
+use crate::srt_packet::{DataPacket, PacketPosition, sequence_less_than};
 use crate::time::Timestamp;
 
 /// 送信パケットエントリ

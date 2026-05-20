@@ -13,7 +13,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::srt_packet::{sequence_less_than, sequence_greater_than, DataPacket};
+use crate::srt_packet::{DataPacket, sequence_greater_than, sequence_less_than};
 use crate::time::Timestamp;
 
 /// Light ACK 送信間隔 (パケット数)
@@ -349,7 +349,12 @@ pub struct ReceiverBuffer {
 
 impl ReceiverBuffer {
     /// 新しい受信バッファを作成
-    pub fn new(initial_seq: u32, tsbpd_delay_ms: u16, start_time: Timestamp, tsbpd_time_base: u64) -> Self {
+    pub fn new(
+        initial_seq: u32,
+        tsbpd_delay_ms: u16,
+        start_time: Timestamp,
+        tsbpd_time_base: u64,
+    ) -> Self {
         Self {
             packets: BTreeMap::new(),
             expected_seq: initial_seq,
@@ -604,8 +609,7 @@ impl ReceiverBuffer {
             return Vec::new();
         }
 
-        let tlpktdrop_threshold = ((self.tsbpd_delay_us as u128 * 125 / 100) as u64)
-            .max(1_000_000); // 最低 1 秒
+        let tlpktdrop_threshold = ((self.tsbpd_delay_us as u128 * 125 / 100) as u64).max(1_000_000); // 最低 1 秒
 
         let mut dropped = Vec::new();
 
