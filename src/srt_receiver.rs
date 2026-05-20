@@ -438,8 +438,7 @@ impl ReceiverBuffer {
                 self.wrapping_period_active = true;
             }
             if self.wrapping_period_active
-                && ts >= WRAPPING_PERIOD_END_MIN
-                && ts <= WRAPPING_PERIOD_END_MAX
+                && (WRAPPING_PERIOD_END_MIN..=WRAPPING_PERIOD_END_MAX).contains(&ts)
             {
                 self.tsbpd_time_base += MAX_TIMESTAMP + 1;
                 self.wrapping_period_active = false;
