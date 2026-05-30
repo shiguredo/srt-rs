@@ -86,6 +86,45 @@ proptest! {
     }
 
     #[test]
+    fn test_salt_low_bytes_do_not_affect_ciphertext(
+        passphrase in "[a-zA-Z0-9]{10,32}",
+        key_length in prop::sample::select(vec![KeyLength::Aes128, KeyLength::Aes256]),
+        salt_high in prop::collection::vec(any::<u8>(), 14..=14),
+        low1 in any::<u8>(),
+        low2 in any::<u8>(),
+        low3 in any::<u8>(),
+        low4 in any::<u8>(),
+        payload_data in prop::collection::vec(any::<u8>(), 16..1400),
+        packet_index in 0u32..1000000,
+    ) {
+        // カウンタブロックの bytes 14-15 (block counter 領域) は IV に影響しないため、
+        // salt の下位 2 バイト (bytes 14-15) だけを変えても暗号文は一致するはず。
+        // self-roundtrip では検出できない「Salt 下位 2 バイト残留」を、encrypt_payload の
+        // 内部実装を参照せず外部観測の不変性として検証する。これは KAT が循環的にしか
+        // 検証できない bytes 14-15 のゼロ化を、外部観測で独立に裏取りするものである
+        // (XOR 位置そのものの検証は担わない。tests/test_crypto.rs のモジュールコメント参照)。
+        let mut salt1 = [0u8; 16];
+        salt1[..14].copy_from_slice(&salt_high);
+        salt1[14] = low1;
+        salt1[15] = low2;
+        let mut salt2 = salt1;
+        salt2[14] = low3;
+        salt2[15] = low4;
+
+        let sek = generate_sek(key_length);
+        let mut ctx1 = CryptoContext::new_sender(&passphrase, key_length, salt1, &sek).expect("creation should succeed");
+        let mut ctx2 = CryptoContext::new_sender(&passphrase, key_length, salt2, &sek).expect("creation should succeed");
+
+        let mut encrypted1 = payload_data.clone();
+        ctx1.encrypt(packet_index, &mut encrypted1).expect("encrypt should succeed");
+        let mut encrypted2 = payload_data.clone();
+        ctx2.encrypt(packet_index, &mut encrypted2).expect("encrypt should succeed");
+
+        // salt の bytes 14-15 のみ異なる 2 つのコンテキストで暗号文が一致する
+        prop_assert_eq!(encrypted1, encrypted2);
+    }
+
+    #[test]
     fn test_sek_wrap_unwrap_roundtrip(
         passphrase in "[a-zA-Z0-9]{10,32}",
         key_length in prop::sample::select(vec![KeyLength::Aes128, KeyLength::Aes256]),
