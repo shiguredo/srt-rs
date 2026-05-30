@@ -2,6 +2,7 @@
 
 - Priority: High
 - Created: 2026-05-14
+- Completed: 2026-05-30
 - Polished: 2026-05-30
 - Model: DeepSeek V4 Pro
 - Branch: feature/fix-deliverable-seq-wrap-around
@@ -142,3 +143,16 @@ closed #0006 は送信側 `handle_ack` で同型のバグ (BTreeMap 数値順と
 - `drop_too_late` が穴を落とした後に後続パケットが配信される既存挙動が維持されていること
 - `CHANGES.md` に `[FIX]` エントリが追加されていること
 - `cargo test` で全テストが通過すること
+
+## 解決方法
+
+`src/srt_receiver.rs` の `find_deliverable_seq` を、配信候補 (時刻 OK かつ `has_gap` でない seq) の中から `sequence_less_than` による循環順で最小の seq を選ぶよう修正した。BTreeMap の u32 数値順への依存を除き、ラップアラウンド境界をまたぐ連続パケットを循環順で配送する。`loss_list` による HoL ブロッキングと `drop_too_late` の穴スキップのセマンティクスは変更していない。コメントに一次資料 (Live Streaming セクションの順序配信要件) と、早期 return せず全候補を走査する理由を明記した。
+
+### テスト
+
+完了条件の各項目を、PBT と単体テストで役割分担して検証する。
+
+- PBT (`pbt/tests/prop_receiver.rs` の `test_pop_ready_wrap_around_delivery_order`): `wrap_around_run` Strategy で必ずラップ境界をまたぐ連続列を生成し、`prop_shuffle` で順不同に受信させ、`pop_ready` の取り出し列が循環順と一致することを検証する。tsbpd 有効・無効の両方を含む。既存の配送系 PBT は `initial_seq` をラップ近傍から除外しておりこの回帰を検出できないため、本 PBT を追加した。
+- 単体テスト (`src/srt_receiver.rs` の `#[cfg(test)] mod tests`): PBT で組みにくい損失ありの境界ケースを置く。`test_pop_ready_blocks_on_loss_across_wrap_boundary` で損失残存時の HoL ブロッキング維持を、`test_pop_ready_skips_hole_after_drop_across_wrap_boundary` で `drop_too_late` による穴除去後の循環順配送を検証する。
+
+`CHANGES.md` の `## develop` に `[FIX]` エントリを追加した。

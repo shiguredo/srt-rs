@@ -33,6 +33,23 @@ fn make_packet_with_payload(seq: u32, timestamp: u32, payload: Vec<u8>) -> DataP
     }
 }
 
+/// ラップ境界近傍の連続シーケンス列と、その順不同の受信順を生成する Strategy
+///
+/// 戻り値は (循環順のシーケンス列, それを順不同にシャッフルした受信順) で、
+/// 受信順のシャッフルは proptest の prop_shuffle に委ねる。
+fn wrap_around_run() -> impl Strategy<Value = (Vec<u32>, Vec<u32>)> {
+    // before 個 (末尾が 0x7FFF_FFFF) と after 個 (0 から始まる) を連結し、必ずラップ境界
+    // (0x7FFF_FFFF -> 0) をまたぐ連続シーケンス列を作る。これにより境界をまたがない退行ケースを除く。
+    (1usize..4usize, 1usize..4usize).prop_flat_map(|(before, after)| {
+        let start_seq = 0x7FFF_FFFFu32 - (before as u32 - 1);
+        let seqs: Vec<u32> = (0..before + after)
+            .map(|i| start_seq.wrapping_add(i as u32) & 0x7FFF_FFFF)
+            .collect();
+        let recv_order = Just(seqs.clone()).prop_shuffle();
+        (Just(seqs), recv_order)
+    })
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(100))]
 
@@ -374,5 +391,36 @@ proptest! {
         let stats = buf.stats();
         // transit が一定なのでジッターは 0
         prop_assert_eq!(stats.jitter, 0);
+    }
+
+    #[test]
+    fn test_pop_ready_wrap_around_delivery_order(
+        (seqs, recv_order) in wrap_around_run(),
+        tsbpd_enabled in any::<bool>(),
+    ) {
+        // ラップ境界をまたぐ連続パケットを順不同で受信し、pop_ready が循環順で取り出すことを
+        // 検証する。既存の配送系 PBT は initial_seq をラップ近傍から除外しているためこの回帰を
+        // 検出できない。tsbpd 有効・無効の両方を含める。
+        let start = Timestamp::from_micros(0);
+        let mut buf = ReceiverBuffer::new(seqs[0], 120, start, 0);
+        buf.set_tsbpd_enabled(tsbpd_enabled);
+
+        let now = Timestamp::from_micros(1000);
+
+        // recv_order (seqs を順不同にした列) で受信する。
+        // 全パケットに同一タイムスタンプを与え配信時刻を揃える。
+        for &seq in &recv_order {
+            buf.receive(make_packet(seq, 100), now);
+        }
+
+        // 全パケットの配信時刻を十分過ぎた時刻で取り出す
+        let pop_now = Timestamp::from_micros(10_000_000_000);
+        let mut popped = Vec::new();
+        while let Some(pkt) = buf.pop_ready(pop_now) {
+            popped.push(pkt.sequence_number);
+        }
+
+        // 欠損が無いため全パケットが循環順 (seqs) で配送される
+        prop_assert_eq!(popped, seqs);
     }
 }
