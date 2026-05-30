@@ -10,6 +10,8 @@ mpeg2ts = "0.5"
 noargs = "0.4"
 shiguredo_mp4 = "2026.3"
 shiguredo_srt = { path = "../.." }
+# ライブラリの tracing ログ出力先を設定する (--debug で level を debug に上げる)
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tokio = { version = "1", features = [
   "macros",
   "net",

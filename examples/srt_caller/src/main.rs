@@ -117,6 +117,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let Some(args) = parse_args().map_err(|e| format!("{e:?}"))? else {
         return Ok(());
     };
+
+    // ライブラリのデバッグ出力は tracing-subscriber で制御する。
+    // RUST_LOG が設定されていればそれを優先する。ライブラリのログは debug レベルのため、
+    // --debug 指定時のみ shiguredo_srt を debug まで出す (既定の info ではライブラリログは出ない)。
+    let default_filter = if args.debug {
+        "shiguredo_srt=debug"
+    } else {
+        "info"
+    };
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default_filter)),
+        )
+        .init();
+
     let target_addr: SocketAddr = format!("{}:{}", args.host, args.port).parse()?;
 
     eprintln!("Connecting to {}", target_addr);
@@ -156,7 +172,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         crypto_salt,
         crypto_sek,
         key_length: KeyLength::Aes128,
-        debug: args.debug,
         ..Default::default()
     };
 

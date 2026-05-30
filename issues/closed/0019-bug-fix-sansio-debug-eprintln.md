@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-05-14
+- Completed: 2026-05-30
 - Polished: 2026-05-30
 - Model: DeepSeek V4 Pro
 - Branch: feature/change-sansio-debug-tracing
@@ -97,3 +98,19 @@ tracing を導入し、`eprintln!` を `tracing::debug!` に置き換える。�
 - `Cargo.toml` に `tracing` 依存が追加されていること
 - `CHANGES.md` に `[CHANGE]` エントリが追加されていること
 - `cargo test`、`cargo build --workspace` (examples 含む)、`cargo clippy --workspace -- -D warnings` (tracing 導入後の未使用 import 等を含む) が通過すること
+
+## 解決方法
+
+`src/srt_connection.rs` の 8 箇所の `eprintln!`（`if self.options.debug` でガードされた `[DEBUG]` 出力）を `tracing::debug!` に置き換え、`if self.options.debug` ゲートを除去した。あわせて冗長になった `ConnectionOptions::debug` フィールドと Default の該当行を削除し、デバッグ出力の制御を tracing-subscriber に一本化した。状態機械から直接 stderr へ書く I/O 副作用がなくなり、sans-io の「プロトコル出力を委ねる」契約と整合する（subscriber がなければ `tracing::debug!` は no-op）。ログメッセージは `received X` / `sending X` の形に統一し、`[DEBUG]` プレフィックスは tracing の level 表示に委ねて削除した。
+
+- `Cargo.toml` に `tracing = "0.1"` を追加した。
+- `examples/srt_caller`、`examples/srt_listener` に `tracing-subscriber`（`env-filter` feature）を追加し、`--debug` フラグで EnvFilter の level を制御するよう移行した。`RUST_LOG` を優先し、`--debug` 指定時のみ `shiguredo_srt=debug` を出す（ライブラリのログは debug レベルのため、既定の info では出ない）。
+- `crates/c-api` は `ConnectionOptions::debug` を参照していない（Default 経由）ため影響はない。
+
+### テスト
+
+ログ出力の検証は subscriber 依存でモック禁止方針と整合しないため、新規テストは課さない。`tests/sansio_test.rs` の `test_debug_mode`（`debug: true` でも接続できることを確認するテストだが、フィールド削除後は意味を失う。接続確立は他のハンドシェイクテストでカバー済み）を削除し、`pbt/tests/prop_connection.rs` の `make_opts` / `make_opts_with_stream_id` から `debug: false` 行を削除した。
+
+`CHANGES.md` の `## develop` に `[CHANGE]` エントリを追加した。
+
+注: examples のアプリ自身の出力（統計・接続状況）は I/O 層からの意図的なコンソール出力であり sans-io 違反ではないため、`eprintln!` のまま残す（本 issue はライブラリ状態機械の sans-io 純度を対象とする）。

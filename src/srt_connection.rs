@@ -157,8 +157,6 @@ pub struct ConnectionOptions {
     pub srt_version: u32,
     /// Stream ID (Caller が Listener に送信する識別子、最大 512 バイト)
     pub stream_id: Option<String>,
-    /// デバッグ出力を有効にする
-    pub debug: bool,
 }
 
 impl Default for ConnectionOptions {
@@ -174,7 +172,6 @@ impl Default for ConnectionOptions {
             tsbpd_delay: 120,
             srt_version: 0x010500, // 1.5.0
             stream_id: None,
-            debug: false,
         }
     }
 }
@@ -344,12 +341,7 @@ impl SrtConnection {
 
         match packet {
             SrtPacket::Data(data_pkt) => {
-                if self.options.debug {
-                    eprintln!(
-                        "[DEBUG] Received DATA packet, seq={}",
-                        data_pkt.sequence_number
-                    );
-                }
+                tracing::debug!("received DATA packet, seq={}", data_pkt.sequence_number);
                 self.handle_data_packet(data_pkt, now)
             }
             SrtPacket::Control(ctrl_pkt) => self.handle_control_packet(ctrl_pkt, now),
@@ -491,16 +483,14 @@ impl SrtConnection {
         };
 
         if let Some(mut packet) = packet {
-            if self.options.debug {
-                eprintln!(
-                    "[DEBUG] Sending DATA: seq={}, msg={}, ts={}, dest_socket_id={:#x}, payload_len={}",
-                    packet.sequence_number,
-                    packet.message_number,
-                    packet.timestamp,
-                    packet.dest_socket_id,
-                    packet.payload.len()
-                );
-            }
+            tracing::debug!(
+                "sending DATA packet, seq={}, msg={}, ts={}, dest_socket_id={:#x}, payload_len={}",
+                packet.sequence_number,
+                packet.message_number,
+                packet.timestamp,
+                packet.dest_socket_id,
+                packet.payload.len()
+            );
 
             // 暗号化
             if let Some(ref mut crypto) = self.crypto {
@@ -682,13 +672,11 @@ impl SrtConnection {
     }
 
     fn handle_control_packet(&mut self, pkt: ControlPacket, now: Timestamp) -> Result<(), Error> {
-        if self.options.debug {
-            eprintln!(
-                "[DEBUG] Control packet: type={:?}, info_len={}",
-                pkt.control_type,
-                pkt.control_info.len()
-            );
-        }
+        tracing::debug!(
+            "received control packet, type={:?}, info_len={}",
+            pkt.control_type,
+            pkt.control_info.len()
+        );
         match pkt.control_type {
             ControlType::Handshake => self.handle_handshake(pkt, now),
             ControlType::Keepalive => Ok(()), // キープアライブは特に処理不要
@@ -725,12 +713,11 @@ impl SrtConnection {
 
                 self.syn_cookie = hs.syn_cookie;
                 self.peer_socket_id = hs.socket_id;
-                if self.options.debug {
-                    eprintln!(
-                        "[DEBUG] INDUCTION response: peer_socket_id={:#x}, syn_cookie={:#x}",
-                        self.peer_socket_id, self.syn_cookie
-                    );
-                }
+                tracing::debug!(
+                    "received INDUCTION response, peer_socket_id={:#x}, syn_cookie={:#x}",
+                    self.peer_socket_id,
+                    self.syn_cookie
+                );
 
                 // 暗号化コンテキスト生成
                 if let Some(ref passphrase) = self.options.passphrase {
@@ -757,12 +744,11 @@ impl SrtConnection {
                 // (INDUCTION とは異なる値の場合がある)
                 self.peer_socket_id = hs.socket_id;
 
-                if self.options.debug {
-                    eprintln!(
-                        "[DEBUG] CONCLUSION response: peer_initial_seq={}, peer_socket_id={:#x}",
-                        hs.initial_packet_seq, hs.socket_id
-                    );
-                }
+                tracing::debug!(
+                    "received CONCLUSION response, peer_initial_seq={}, peer_socket_id={:#x}",
+                    hs.initial_packet_seq,
+                    hs.socket_id
+                );
 
                 // KMRSP を検証
                 if self.crypto.is_some() {
@@ -902,23 +888,19 @@ impl SrtConnection {
         let mut buf = pkt.control_info.as_slice();
         let ack_seq = crate::buf::ByteSliceExt::read_u32(&mut buf)?;
 
-        if self.options.debug {
-            eprintln!(
-                "[DEBUG] ACK received: ack_seq={}, type_specific_info={}, control_info_len={}",
-                ack_seq,
-                pkt.type_specific_info,
-                pkt.control_info.len()
-            );
-        }
+        tracing::debug!(
+            "received ACK, ack_seq={}, type_specific_info={}, control_info_len={}",
+            ack_seq,
+            pkt.type_specific_info,
+            pkt.control_info.len()
+        );
 
         // 送信バッファから ACK されたパケットを削除
         if let Some(ref mut sender) = self.sender {
             let before = sender.packets_in_buffer();
             sender.handle_ack(ack_seq);
             let after = sender.packets_in_buffer();
-            if self.options.debug {
-                eprintln!("[DEBUG] Buffer: {} -> {} packets", before, after);
-            }
+            tracing::debug!("sender buffer: {} -> {} packets", before, after);
         }
 
         // Full ACK の場合、ACKACK を送信
@@ -1239,12 +1221,12 @@ impl SrtConnection {
         };
 
         let has_encryption = self.options.passphrase.is_some();
-        if self.options.debug {
-            eprintln!(
-                "[DEBUG] CONCLUSION request: our_initial_seq={}, socket_id={:#x}, syn_cookie={:#x}",
-                self.initial_seq, self.options.socket_id, self.syn_cookie
-            );
-        }
+        tracing::debug!(
+            "sending CONCLUSION request, our_initial_seq={}, socket_id={:#x}, syn_cookie={:#x}",
+            self.initial_seq,
+            self.options.socket_id,
+            self.syn_cookie
+        );
         let mut hs = HandshakePacket::new_conclusion_request(
             self.options.socket_id,
             self.syn_cookie,

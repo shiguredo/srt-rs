@@ -16,3 +16,5 @@ noargs = "0.4"
 mpeg2ts = "0.5"
 shiguredo_mp4 = "2026.3"
 aws-lc-rs = "1.16"
+# ライブラリの tracing ログ出力先を設定する (--debug で level を debug に上げる)
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
