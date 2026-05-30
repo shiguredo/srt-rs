@@ -2,6 +2,7 @@
 
 - Priority: Low
 - Created: 2026-05-14
+- Completed: 2026-05-30
 - Polished: 2026-05-30
 - Model: DeepSeek V4 Pro
 - Branch: feature/refactor-move-sequence-funcs-before-tests
@@ -58,3 +59,18 @@ CHANGES.md の `### misc` には既に `[CHANGE] sequence_less_than / sequence_g
 - `cargo test` で全テストが通過すること
 
 注: 完了条件の clippy コマンドは `--all-targets` を付ける。CI ゲートはこれを付けず本違反を検証しない (理由は優先度根拠を参照) ため、修正後の確認はローカルで行うこと。CI ゲート自体への `--all-targets` 追加は本 issue のスコープ外とし、必要なら別 issue で扱う。
+
+## 解決方法
+
+`src/srt_packet.rs` の `pub(crate) fn sequence_less_than` と `pub(crate) fn sequence_greater_than` の 2 関数を、直前の doc コメントごと `#[cfg(test)] mod tests` ブロックの**前** (`impl ControlPacket` を閉じる `}` の直後) へ移動した。設計方針どおり純粋な移動であり、関数本体・シグネチャ・可視性 (`pub(crate)`)・doc コメントはバイト単位で不変。移動後はファイル末尾が `mod tests` で終わり、test module の後ろに項目は残っていない。
+
+- 変更ファイル: `src/srt_packet.rs` のみ (11 行の移動)
+- `#[allow]` / `#[expect]` による握り潰しは行わず、コード配置で `items_after_test_module` を解消した
+- 呼び出し元 (`src/srt_receiver.rs`, `src/srt_sender.rs`) は `use crate::srt_packet::...` でパス解決しておりファイル内位置に依存しないため影響なし
+- 新規テストは追加しない (挙動不変のため)。`sequence_less_than` の挙動は既存の単体テスト (`src/srt_sender.rs` の `test_sequence_less_than`) で担保される
+
+確認:
+
+- `cargo clippy --workspace --all-targets -- -D warnings` 通過 (`items_after_test_module` 解消)
+- `cargo test --workspace` 全通過 (267 件)
+- `cargo fmt --all -- --check` 差分なし
