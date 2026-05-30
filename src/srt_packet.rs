@@ -326,6 +326,17 @@ impl ControlPacket {
     }
 }
 
+/// シーケンス番号の比較 (ラップアラウンド対応, 31-bit)
+pub(crate) fn sequence_less_than(a: u32, b: u32) -> bool {
+    let diff = b.wrapping_sub(a) & 0x7FFF_FFFF;
+    diff > 0 && diff < 0x4000_0000
+}
+
+/// シーケンス番号の比較 (ラップアラウンド対応, 31-bit)
+pub(crate) fn sequence_greater_than(a: u32, b: u32) -> bool {
+    sequence_less_than(b, a)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -384,15 +395,4 @@ mod tests {
         assert_eq!(PacketPosition::from_bits(0b01), PacketPosition::Last);
         assert_eq!(PacketPosition::from_bits(0b11), PacketPosition::Single);
     }
-}
-
-/// シーケンス番号の比較 (ラップアラウンド対応, 31-bit)
-pub(crate) fn sequence_less_than(a: u32, b: u32) -> bool {
-    let diff = b.wrapping_sub(a) & 0x7FFF_FFFF;
-    diff > 0 && diff < 0x4000_0000
-}
-
-/// シーケンス番号の比較 (ラップアラウンド対応, 31-bit)
-pub(crate) fn sequence_greater_than(a: u32, b: u32) -> bool {
-    sequence_less_than(b, a)
 }
