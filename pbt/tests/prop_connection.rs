@@ -949,7 +949,6 @@ fn make_opts(socket_id: u32) -> ConnectionOptions {
         tsbpd_delay: 120,
         srt_version: 0x010500,
         stream_id: None,
-        debug: false,
         crypto_salt: None,
         crypto_sek: None,
     }
@@ -966,7 +965,6 @@ fn make_opts_with_stream_id(socket_id: u32, stream_id: String) -> ConnectionOpti
         tsbpd_delay: 120,
         srt_version: 0x010500,
         stream_id: Some(stream_id),
-        debug: false,
         crypto_salt: None,
         crypto_sek: None,
     }

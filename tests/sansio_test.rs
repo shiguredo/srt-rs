@@ -745,28 +745,6 @@ fn test_receive_encrypted_data_with_aes256() {
 }
 
 #[test]
-fn test_debug_mode() {
-    let caller_opts = ConnectionOptions {
-        debug: true,
-        tsbpd_delay: 0,
-        ..Default::default()
-    };
-    let listener_opts = ConnectionOptions {
-        debug: true,
-        tsbpd_delay: 0,
-        ..Default::default()
-    };
-
-    let mut caller = SrtConnection::new_caller(caller_opts);
-    let mut listener = SrtConnection::new_listener(listener_opts);
-
-    // デバッグモードでも接続できる
-    establish_connection(&mut caller, &mut listener).expect("connection should be established");
-
-    assert_eq!(caller.state(), ConnectionState::Connected);
-}
-
-#[test]
 fn test_listener_receive_shutdown() {
     let mut caller = SrtConnection::new_caller(test_options());
     let mut listener = SrtConnection::new_listener(test_options());
