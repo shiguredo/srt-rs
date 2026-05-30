@@ -503,15 +503,32 @@ impl ReceiverBuffer {
     }
 
     /// 配信可能なシーケンス番号を検索
+    ///
+    /// `packets` の BTreeMap は u32 の数値順でイテレートするが、31-bit シーケンス番号の
+    /// 循環順 (`sequence_less_than`) とラップアラウンド境界 (0x7FFF_FFFF -> 0) で食い違う。
+    /// SRT 仕様 (draft-sharabayko-srt.md の Live Streaming セクション) は TSBPD 配信を
+    /// 「deliver packets in order, but based on the timestamps」と定めており、配送順は
+    /// 数値順ではなく循環順に従う必要がある (節構成・行番号は将来変更される可能性がある)。
+    /// 数値順で最初に見つけた候補を返すと境界をまたぐ連続パケットの配送順序が逆転するため、
+    /// 配信候補の中から循環順で最小の seq を選ぶ。
+    ///
+    /// 早期 return せず全候補を走査するのは、循環順最小が数値順最小と食い違うのはラップ境界を
+    /// またぐ場合のみだが、その判定に全候補の循環順比較が要るためである。堅牢性を優先し、
+    /// 配信ポインタ等の最適化は導入しない。
     fn find_deliverable_seq(&self, now: Timestamp) -> Option<u32> {
+        let mut best: Option<u32> = None;
         for (&seq, entry) in &self.packets {
             let time_ok = !self.tsbpd_enabled || entry.delivery_time <= now;
             let has_gap = self.loss_list.iter().any(|&s| sequence_less_than(s, seq));
             if time_ok && !has_gap {
-                return Some(seq);
+                // 既存 best が seq より循環順で前なら保持、そうでなければ seq に更新する
+                best = match best {
+                    Some(b) if sequence_less_than(b, seq) => Some(b),
+                    _ => Some(seq),
+                };
             }
         }
-        None
+        best
     }
 
     /// ACK を生成すべきかチェック
@@ -1214,5 +1231,56 @@ mod tests {
 
         // Full ACK では ack_number がインクリメントされる
         assert_eq!(buf.ack_number(), ack_number_before + 1);
+    }
+
+    #[test]
+    fn test_pop_ready_blocks_on_loss_across_wrap_boundary() {
+        // ラップ境界をまたぐ区間で先頭の 0x7FFF_FFFE が欠損しているとき、loss_list による
+        // HoL ブロッキングが後続 (循環順で 0x7FFF_FFFE より後ろ) の配信を止め続けることを検証する。
+        // 欠損なしの配送順序は PBT が網羅するため、ここでは PBT で作りにくい損失ありの境界ケースを置く。
+        let start = Timestamp::from_micros(0);
+        let mut buf = ReceiverBuffer::new(0x7FFF_FFFE, 120, start, 0);
+        buf.set_tsbpd_enabled(false);
+
+        let now = Timestamp::from_micros(1000);
+
+        // 0x7FFF_FFFE を欠損させ、循環順で後続の 0x7FFF_FFFF, 0, 1 を受信する。
+        // 0x7FFF_FFFE が loss_list に残る。
+        buf.receive(make_packet(0x7FFF_FFFF, 100), now);
+        buf.receive(make_packet(0, 100), now);
+        buf.receive(make_packet(1, 100), now);
+
+        // 0x7FFF_FFFE が損失として残る間は、循環順で後ろの候補は配信されない。
+        assert!(buf.pop_ready(now).is_none());
+    }
+
+    #[test]
+    fn test_pop_ready_skips_hole_after_drop_across_wrap_boundary() {
+        // ラップ境界をまたぐ区間で 0x7FFF_FFFE が欠損したまま drop_too_late で穴が loss_list から
+        // 除去されたら、後続 0x7FFF_FFFF, 0, 1 が循環順で配信されること (穴スキップ維持) を検証する。
+        // drop_too_late は tsbpd 有効が前提のため、ここでは tsbpd を無効化しない。
+        let start = Timestamp::from_micros(0);
+        let mut buf = ReceiverBuffer::new(0x7FFF_FFFE, 120, start, 0);
+
+        let recv_now = Timestamp::from_micros(1000);
+        buf.receive(make_packet(0x7FFF_FFFF, 100), recv_now);
+        buf.receive(make_packet(0, 100), recv_now);
+        buf.receive(make_packet(1, 100), recv_now);
+
+        // 穴 (0x7FFF_FFFE) が残る間は HoL ブロッキングで配信されない。
+        // tlpktdrop 閾値 (最低 1 秒) を確実に超える時刻で評価する。
+        let late_now = Timestamp::from_micros(10_000_000);
+        assert!(buf.pop_ready(late_now).is_none());
+
+        // drop_too_late で期限切れの穴 (0x7FFF_FFFE) を loss_list から除去する。
+        let dropped = buf.drop_too_late(late_now);
+        assert_eq!(dropped, vec![0x7FFF_FFFE]);
+
+        // 穴が消えた後、後続が循環順で配信される。
+        let mut popped = Vec::new();
+        while let Some(pkt) = buf.pop_ready(late_now) {
+            popped.push(pkt.sequence_number);
+        }
+        assert_eq!(popped, vec![0x7FFF_FFFF, 0, 1]);
     }
 }
