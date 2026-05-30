@@ -2,6 +2,7 @@
 
 - Priority: High
 - Created: 2026-05-14
+- Completed: 2026-05-30
 - Polished: 2026-05-30
 - Model: DeepSeek V4 Pro
 - Branch: feature/fix-aes-ctr-iv-construction
@@ -154,3 +155,20 @@ KAT には最低限以下のケースを含める:
 - `tests/test_crypto.rs` の KAT が追加され、packet_index が 0 でないケースで仕様準拠の期待暗号文と一致すること
 - `CHANGES.md` に `[FIX]` エントリが追加されていること
 - `cargo test` で全テストが通過すること
+
+## 解決方法
+
+`src/crypto.rs` の `encrypt_payload` のカウンタブロック構築を SRT 仕様の「AES Counter」サブセクションに準拠するよう修正した。
+
+- `iv.copy_from_slice(salt)` (全 16 バイトコピー) を `iv[..14].copy_from_slice(&salt[..14])` に変更し、カウンタブロックの bytes 14-15 (block counter 領域) を 0 のままにした (Salt 下位 2 バイトの残留を除去)。
+- packet index の XOR 位置を bytes 12-15 から bytes 10-13 (bits 16-47) に修正した。
+- コメントを根拠資料名 (draft-sharabayko-srt.md)・サブセクション名 (AES Counter)・将来変更の可能性・libsrt haicrypt 実装との一致を明記する内容に更新した。
+
+この構築が libsrt の `hcrypt_SetCtrIV` (haicrypt/hcrypt.h) とバイト単位で一致することをソースで確認した。
+
+### テスト
+
+- `tests/test_crypto.rs` (新規) に KAT を追加した。仕様の byte 配置で構築したカウンタブロックで計算した暗号文と `CryptoContext::encrypt` の出力を照合する。packet_index が 0 でないケース (AES-128/256)、packet_index=0 で bytes 14-15 のゼロ化を切り分けるケース、packet_index が u32::MAX 付近のケースを含む。
+- KAT は `encrypt_payload` と同じ byte 解釈を共有する回帰防止テストのため、`pbt/tests/prop_crypto.rs` に非循環の PBT `test_salt_low_bytes_do_not_affect_ciphertext` を追加した。salt の下位 2 バイトだけを変えても暗号文が一致する不変条件を、`encrypt_payload` の内部を参照せず外部観測で検証する。
+
+`CHANGES.md` の `## develop` に `[FIX]` エントリを追加した。

@@ -11,6 +11,8 @@
 
 ## develop
 
+- [FIX] AES-CTR のカウンタブロック構築を SRT 仕様に準拠するよう修正する
+  - @voluntas
 - [FIX] drop_too_late のドロップ判定をパケット個別の配信時刻に基づいて行うよう修正する
   - @voluntas
 - [FIX] unwrap_sek で 8 バイト未満の入力によるパニックを修正する

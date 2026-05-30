@@ -395,19 +395,25 @@ fn encrypt_payload(
     payload: &mut [u8],
     key_length: KeyLength,
 ) -> Result<(), Error> {
-    // IV を構築 (SRT 仕様に従う)
-    // IV = Salt XOR (0 || packet_index || 0)
-    // 上位 112 bits の Salt と packet_index を XOR
+    // カウンタブロック (AES-CTR の初期 IV) を構築する。
+    // 根拠資料: draft-sharabayko-srt.md「Encryption」セクション内「AES Counter」サブセクション。
+    // 128-bit のカウンタブロックをビッグエンディアンの 16 バイト配列とみなすと:
+    //   - bits 0-15 (bytes 14-15): block counter。各パケットの先頭ブロックでは 0。Salt とは XOR しない
+    //   - bits 16-47 (bytes 10-13): packet index
+    //   - bits 48-127 (bytes 0-9): ゼロ
+    //   - 上位 112 bits (bytes 0-13) を IV = MSB(112, Salt) (= salt[0..14]) と XOR する
+    // この構造は libsrt の haicrypt 実装のカウンタブロックと一致する。
+    // 仕様の節構成・行番号・式表現は将来変更される可能性がある。
     let mut iv = [0u8; 16];
-    iv.copy_from_slice(salt);
+    // 上位 112 bits (bytes 0-13) に IV = MSB(112, Salt) を置く。bytes 14-15 は 0 のまま。
+    iv[..14].copy_from_slice(&salt[..14]);
 
-    // packet_index を IV の適切な位置に XOR
-    // SRT では packet_index を IV の特定位置に配置
+    // packet index を bytes 10-13 に XOR する (to_be_bytes は [MSB, .., LSB])。
     let pi_bytes = packet_index.to_be_bytes();
-    iv[12] ^= pi_bytes[0];
-    iv[13] ^= pi_bytes[1];
-    iv[14] ^= pi_bytes[2];
-    iv[15] ^= pi_bytes[3];
+    iv[10] ^= pi_bytes[0];
+    iv[11] ^= pi_bytes[1];
+    iv[12] ^= pi_bytes[2];
+    iv[13] ^= pi_bytes[3];
 
     let algorithm = match key_length {
         KeyLength::Aes128 => &AES_128,
