@@ -667,7 +667,10 @@ impl Mp4ToTsConverter {
                 };
 
                 data_offset += chunk_len;
-                (Some(TsPayload::PesStart(pes)), sample.data.len() - data_offset)
+                (
+                    Some(TsPayload::PesStart(pes)),
+                    sample.data.len() - data_offset,
+                )
             } else {
                 // 継続パケットは Raw データ
                 let chunk_len = available.min(sample.data.len() - data_offset);
