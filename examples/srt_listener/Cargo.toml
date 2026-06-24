@@ -6,15 +6,15 @@ publish = false
 
 [dependencies]
 shiguredo_srt = { path = "../.." }
-tokio = { version = "1", features = [
+tokio = { version = "1.52", features = [
     "rt-multi-thread",
     "macros",
     "net",
     "time",
 ] }
 noargs = "0.4"
-mpeg2ts = "0.5"
+mpeg2ts = "0.6"
 shiguredo_mp4 = "2026.3"
-aws-lc-rs = "1.16"
+aws-lc-rs = "1.17"
 # ライブラリの tracing ログ出力先を設定する (--debug で level を debug に上げる)
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

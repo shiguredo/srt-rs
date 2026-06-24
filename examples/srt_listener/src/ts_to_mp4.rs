@@ -440,7 +440,7 @@ impl<R: std::io::Read> ReadTsPacket for TsPacketReaderWrapper<R> {
                             .insert(es_info.elementary_pid, es_info.stream_type);
                     }
                 }
-                Some(TsPayload::Pes(pes))
+                Some(TsPayload::PesStart(pes))
                     if self.pid_to_stream_type.contains_key(&packet.header.pid) =>
                 {
                     self.stream_id_to_pid

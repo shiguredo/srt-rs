@@ -20,6 +20,6 @@ members = [
 exclude = ["fuzz"]
 
 [dependencies]
-aws-lc-rs = "1.16"
+aws-lc-rs = "1.17"
 # ログ出力 (デバッグ出力を tracing-subscriber 側で制御する)
 tracing = "0.1"
