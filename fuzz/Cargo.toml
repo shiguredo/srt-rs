@@ -7,20 +7,20 @@ publish = false
 [package.metadata]
 cargo-fuzz = true
 
-[dependencies]
-libfuzzer-sys = "0.4"
-shiguredo_srt = { path = ".." }
-
 [[bin]]
+bench = false
+doc = false
 name = "fuzz_packet_decode"
 path = "fuzz_targets/fuzz_packet_decode.rs"
 test = false
-doc = false
-bench = false
 
 [[bin]]
+bench = false
+doc = false
 name = "fuzz_handshake_decode"
 path = "fuzz_targets/fuzz_handshake_decode.rs"
 test = false
-doc = false
-bench = false
+
+[dependencies]
+libfuzzer-sys = "0.4"
+shiguredo_srt = { path = ".." }

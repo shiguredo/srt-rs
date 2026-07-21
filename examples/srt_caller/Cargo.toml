@@ -10,12 +10,15 @@ mpeg2ts = "0.6"
 noargs = "0.4"
 shiguredo_mp4 = "2026.3"
 shiguredo_srt = { path = "../.." }
+tokio = {
+  version = "1.52",
+  features = [
+    "macros",
+    "net",
+    "rt-multi-thread",
+    "sync",
+    "time",
+  ]
+}
 # ライブラリの tracing ログ出力先を設定する (--debug で level を debug に上げる)
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-tokio = { version = "1.52", features = [
-  "macros",
-  "net",
-  "rt-multi-thread",
-  "sync",
-  "time",
-] }

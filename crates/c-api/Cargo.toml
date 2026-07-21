@@ -5,8 +5,8 @@ edition = "2024"
 publish = false
 
 [lib]
-name = "srt"
 crate-type = ["cdylib", "staticlib"]
+name = "srt"
 
 [dependencies]
 shiguredo_srt = { path = "../.." }

@@ -5,5 +5,5 @@ edition = "2024"
 publish = false
 
 [dev-dependencies]
-shiguredo_srt = { path = "../" }
 proptest = "1.11"
+shiguredo_srt = { path = "../" }
