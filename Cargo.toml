@@ -2,7 +2,7 @@
 name = "shiguredo_srt"
 version = "2026.1.0-canary.1"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.93"
 description = "SRT (Secure Reliable Transport) library"
 readme = "README.md"
 homepage = "https://github.com/shiguredo/srt-rs"
