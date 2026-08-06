@@ -30,7 +30,7 @@ proptest! {
         let mut conn = SrtConnection::new_caller(make_opts(1));
         let now = Timestamp::from_micros(start_time);
 
-        conn.connect(now).unwrap();
+        conn.connect(now).expect("接続は成功する想定");
         prop_assert_eq!(conn.state(), ConnectionState::Induction);
     }
 
@@ -83,12 +83,13 @@ proptest! {
         let mut conn = SrtConnection::new_caller(make_opts(1));
         let now = Timestamp::from_micros(0);
 
-        conn.connect(now).unwrap();
+        conn.connect(now).expect("接続は成功する想定");
         drain_packets(&mut conn);
 
         // タイムアウト発火
         let timeout_now = Timestamp::from_micros(timeout_time);
-        conn.handle_timer(TimerId::Handshake, timeout_now).unwrap();
+        conn.handle_timer(TimerId::Handshake, timeout_now)
+            .expect("タイマー処理は成功する想定");
 
         prop_assert_eq!(conn.state(), ConnectionState::Disconnected);
     }
@@ -103,11 +104,11 @@ proptest! {
 
         let initial_state = conn.state();
 
-        conn.handle_timer(TimerId::Keepalive, now).unwrap();
-        conn.handle_timer(TimerId::Ack, now).unwrap();
-        conn.handle_timer(TimerId::Nak, now).unwrap();
-        conn.handle_timer(TimerId::Retransmit, now).unwrap();
-        conn.handle_timer(TimerId::Inactivity, now).unwrap();
+        conn.handle_timer(TimerId::Keepalive, now).expect("タイマー処理は成功する想定");
+        conn.handle_timer(TimerId::Ack, now).expect("タイマー処理は成功する想定");
+        conn.handle_timer(TimerId::Nak, now).expect("タイマー処理は成功する想定");
+        conn.handle_timer(TimerId::Retransmit, now).expect("タイマー処理は成功する想定");
+        conn.handle_timer(TimerId::Inactivity, now).expect("タイマー処理は成功する想定");
 
         prop_assert_eq!(conn.state(), initial_state);
         prop_assert!(conn.poll_output().is_none());
@@ -133,30 +134,30 @@ proptest! {
         let mut caller = SrtConnection::new_caller(make_opts(1));
         let mut listener = SrtConnection::new_listener(make_opts(2));
 
-        caller.connect(now).unwrap();
+        caller.connect(now).expect("接続は成功する想定");
 
         // INDUCTION
         let induction_req = drain_packets(&mut caller);
         prop_assert!(!induction_req.is_empty(), "INDUCTION request must be sent");
 
-        listener.feed_recv_buf(&induction_req[0], now).unwrap();
+        listener.feed_recv_buf(&induction_req[0], now).expect("受信バッファへのフィードは成功する想定");
         let induction_resp = drain_packets(&mut listener);
         prop_assert!(!induction_resp.is_empty(), "INDUCTION response must be sent");
 
         now = Timestamp::from_micros(now.as_micros() + rtt);
-        caller.feed_recv_buf(&induction_resp[0], now).unwrap();
+        caller.feed_recv_buf(&induction_resp[0], now).expect("受信バッファへのフィードは成功する想定");
 
         // CONCLUSION
         let conclusion_req = drain_packets(&mut caller);
         prop_assert!(!conclusion_req.is_empty(), "CONCLUSION request must be sent");
 
-        listener.feed_recv_buf(&conclusion_req[0], now).unwrap();
+        listener.feed_recv_buf(&conclusion_req[0], now).expect("受信バッファへのフィードは成功する想定");
         prop_assert_eq!(listener.state(), ConnectionState::Connected);
 
         let conclusion_resp = drain_packets(&mut listener);
         prop_assert!(!conclusion_resp.is_empty(), "CONCLUSION response must be sent");
 
-        caller.feed_recv_buf(&conclusion_resp[0], now).unwrap();
+        caller.feed_recv_buf(&conclusion_resp[0], now).expect("受信バッファへのフィードは成功する想定");
         prop_assert_eq!(caller.state(), ConnectionState::Connected);
     }
 
@@ -212,16 +213,16 @@ proptest! {
         let mut listener = SrtConnection::new_listener(make_opts(2));
         establish_connection(&mut caller, &mut listener, &mut now);
 
-        caller.send(&payload, now).unwrap();
+        caller.send(&payload, now).expect("送信は成功する想定");
         let packets = drain_packets(&mut caller);
 
         // TSBPD 遅延後に配信
         now = Timestamp::from_micros(now.as_micros() + 200_000);
 
         for pkt in &packets {
-            listener.feed_recv_buf(pkt, now).unwrap();
+            listener.feed_recv_buf(pkt, now).expect("受信バッファへのフィードは成功する想定");
         }
-        listener.handle_timer(TimerId::Ack, now).unwrap();
+        listener.handle_timer(TimerId::Ack, now).expect("タイマー処理は成功する想定");
 
         let events = drain_events(&mut listener);
         let received = extract_received_data(&events);
@@ -242,24 +243,24 @@ proptest! {
         establish_connection(&mut caller, &mut listener, &mut now);
 
         // 双方向送信
-        caller.send(&caller_data, now).unwrap();
+        caller.send(&caller_data, now).expect("送信は成功する想定");
         let caller_packets = drain_packets(&mut caller);
 
-        listener.send(&listener_data, now).unwrap();
+        listener.send(&listener_data, now).expect("送信は成功する想定");
         let listener_packets = drain_packets(&mut listener);
 
         now = Timestamp::from_micros(now.as_micros() + 200_000);
 
         // 相互受信
         for pkt in &caller_packets {
-            listener.feed_recv_buf(pkt, now).unwrap();
+            listener.feed_recv_buf(pkt, now).expect("受信バッファへのフィードは成功する想定");
         }
         for pkt in &listener_packets {
-            caller.feed_recv_buf(pkt, now).unwrap();
+            caller.feed_recv_buf(pkt, now).expect("受信バッファへのフィードは成功する想定");
         }
 
-        caller.handle_timer(TimerId::Ack, now).unwrap();
-        listener.handle_timer(TimerId::Ack, now).unwrap();
+        caller.handle_timer(TimerId::Ack, now).expect("タイマー処理は成功する想定");
+        listener.handle_timer(TimerId::Ack, now).expect("タイマー処理は成功する想定");
 
         let received_by_listener = extract_received_data(&drain_events(&mut listener));
         let received_by_caller = extract_received_data(&drain_events(&mut caller));
@@ -301,16 +302,16 @@ proptest! {
         // 複数回送信
         let mut all_packets = Vec::new();
         for chunk in &chunks {
-            caller.send(chunk, now).unwrap();
+            caller.send(chunk, now).expect("送信は成功する想定");
             all_packets.extend(drain_packets(&mut caller));
         }
 
         now = Timestamp::from_micros(now.as_micros() + 200_000);
 
         for pkt in &all_packets {
-            listener.feed_recv_buf(pkt, now).unwrap();
+            listener.feed_recv_buf(pkt, now).expect("受信バッファへのフィードは成功する想定");
         }
-        listener.handle_timer(TimerId::Ack, now).unwrap();
+        listener.handle_timer(TimerId::Ack, now).expect("タイマー処理は成功する想定");
 
         let received = extract_received_data(&drain_events(&mut listener));
         let expected: Vec<u8> = chunks.into_iter().flatten().collect();
@@ -359,7 +360,7 @@ proptest! {
         caller.disconnect(now);
         let shutdown_packets = drain_packets(&mut caller);
 
-        listener.feed_recv_buf(&shutdown_packets[0], now).unwrap();
+        listener.feed_recv_buf(&shutdown_packets[0], now).expect("受信バッファへのフィードは成功する想定");
         prop_assert_eq!(listener.state(), ConnectionState::Disconnected);
 
         let events = drain_events(&mut listener);
@@ -378,7 +379,7 @@ proptest! {
         let mut listener = SrtConnection::new_listener(make_opts(2));
         establish_connection(&mut caller, &mut listener, &mut now);
 
-        caller.handle_timer(TimerId::Inactivity, now).unwrap();
+        caller.handle_timer(TimerId::Inactivity, now).expect("タイマー処理は成功する想定");
         prop_assert_eq!(caller.state(), ConnectionState::Disconnected);
     }
 }
@@ -404,7 +405,7 @@ proptest! {
         drain_packets(&mut caller);
 
         now = Timestamp::from_micros(now.as_micros() + elapsed);
-        caller.handle_timer(TimerId::Keepalive, now).unwrap();
+        caller.handle_timer(TimerId::Keepalive, now).expect("タイマー処理は成功する想定");
 
         let packets = drain_packets(&mut caller);
         prop_assert!(!packets.is_empty(), "Keepalive must send packet");
@@ -422,7 +423,7 @@ proptest! {
         establish_connection(&mut caller, &mut listener, &mut now);
 
         now = Timestamp::from_micros(now.as_micros() + elapsed);
-        caller.handle_timer(TimerId::Ack, now).unwrap();
+        caller.handle_timer(TimerId::Ack, now).expect("タイマー処理は成功する想定");
 
         prop_assert_eq!(caller.state(), ConnectionState::Connected);
     }
@@ -439,7 +440,7 @@ proptest! {
         establish_connection(&mut caller, &mut listener, &mut now);
 
         now = Timestamp::from_micros(now.as_micros() + elapsed);
-        listener.handle_timer(TimerId::Nak, now).unwrap();
+        listener.handle_timer(TimerId::Nak, now).expect("タイマー処理は成功する想定");
 
         prop_assert_eq!(listener.state(), ConnectionState::Connected);
     }
@@ -456,7 +457,7 @@ proptest! {
         establish_connection(&mut caller, &mut listener, &mut now);
 
         now = Timestamp::from_micros(now.as_micros() + elapsed);
-        caller.handle_timer(TimerId::Retransmit, now).unwrap();
+        caller.handle_timer(TimerId::Retransmit, now).expect("タイマー処理は成功する想定");
 
         prop_assert_eq!(caller.state(), ConnectionState::Connected);
     }
@@ -498,10 +499,10 @@ proptest! {
         establish_connection(&mut caller, &mut listener, &mut now);
 
         let payload = vec![0u8; payload_size];
-        caller.send(&payload, now).unwrap();
+        caller.send(&payload, now).expect("送信は成功する想定");
         drain_packets(&mut caller);
 
-        let stats = caller.sender_stats().unwrap();
+        let stats = caller.sender_stats().expect("統計取得は成功する想定");
         prop_assert!(stats.total_sent > 0, "total_sent should increase after send");
     }
 
@@ -517,15 +518,15 @@ proptest! {
         establish_connection(&mut caller, &mut listener, &mut now);
 
         let payload = vec![0u8; payload_size];
-        caller.send(&payload, now).unwrap();
+        caller.send(&payload, now).expect("送信は成功する想定");
         let packets = drain_packets(&mut caller);
 
         now = Timestamp::from_micros(now.as_micros() + 200_000);
         for pkt in &packets {
-            listener.feed_recv_buf(pkt, now).unwrap();
+            listener.feed_recv_buf(pkt, now).expect("受信バッファへのフィードは成功する想定");
         }
 
-        let stats = listener.receiver_stats().unwrap();
+        let stats = listener.receiver_stats().expect("統計取得は成功する想定");
         prop_assert!(stats.total_received > 0, "total_received should increase after recv");
     }
 }
@@ -572,7 +573,7 @@ proptest! {
 
         // 大きなデータを送信（複数パケットになる）
         let payload = vec![0xAB; payload_size];
-        caller.send(&payload, now).unwrap();
+        caller.send(&payload, now).expect("送信は成功する想定");
         let packets = drain_packets(&mut caller);
 
         if packets.len() < 2 {
@@ -587,7 +588,7 @@ proptest! {
 
         // NAK タイマーを発火
         now = Timestamp::from_micros(now.as_micros() + 20_000);
-        listener.handle_timer(TimerId::Nak, now).unwrap();
+        listener.handle_timer(TimerId::Nak, now).expect("タイマー処理は成功する想定");
 
         // NAK パケットが送信されるはず
         let nak_packets = drain_packets(&mut listener);
@@ -609,7 +610,7 @@ proptest! {
         establish_connection(&mut caller, &mut listener, &mut now);
 
         let payload = vec![0xCD; payload_size];
-        caller.send(&payload, now).unwrap();
+        caller.send(&payload, now).expect("送信は成功する想定");
         let mut packets = drain_packets(&mut caller);
 
         if packets.len() < 2 {
@@ -621,10 +622,10 @@ proptest! {
         // パケットを逆順で受信
         packets.reverse();
         for pkt in &packets {
-            listener.feed_recv_buf(pkt, now).unwrap();
+            listener.feed_recv_buf(pkt, now).expect("受信バッファへのフィードは成功する想定");
         }
 
-        listener.handle_timer(TimerId::Ack, now).unwrap();
+        listener.handle_timer(TimerId::Ack, now).expect("タイマー処理は成功する想定");
 
         // 接続が維持されること
         prop_assert_eq!(listener.state(), ConnectionState::Connected);
@@ -641,20 +642,20 @@ proptest! {
         let mut listener = SrtConnection::new_listener(make_opts(2));
         establish_connection(&mut caller, &mut listener, &mut now);
 
-        caller.send(&payload, now).unwrap();
+        caller.send(&payload, now).expect("送信は成功する想定");
         let packets = drain_packets(&mut caller);
 
         now = Timestamp::from_micros(now.as_micros() + 200_000);
 
         // 同じパケットを 2 回受信
         for pkt in &packets {
-            listener.feed_recv_buf(pkt, now).unwrap();
+            listener.feed_recv_buf(pkt, now).expect("受信バッファへのフィードは成功する想定");
         }
         for pkt in &packets {
-            listener.feed_recv_buf(pkt, now).unwrap();
+            listener.feed_recv_buf(pkt, now).expect("受信バッファへのフィードは成功する想定");
         }
 
-        listener.handle_timer(TimerId::Ack, now).unwrap();
+        listener.handle_timer(TimerId::Ack, now).expect("タイマー処理は成功する想定");
 
         // データは 1 回だけ配信されるべき
         let events = drain_events(&mut listener);
@@ -675,14 +676,14 @@ proptest! {
         establish_connection(&mut caller, &mut listener, &mut now);
 
         // データ送信
-        caller.send(&payload, now).unwrap();
+        caller.send(&payload, now).expect("送信は成功する想定");
         drain_packets(&mut caller);
 
         // 時間経過
         now = Timestamp::from_micros(now.as_micros() + 500_000);
 
         // Retransmit タイマーを発火
-        caller.handle_timer(TimerId::Retransmit, now).unwrap();
+        caller.handle_timer(TimerId::Retransmit, now).expect("タイマー処理は成功する想定");
 
         // パニックせず接続維持
         prop_assert_eq!(caller.state(), ConnectionState::Connected);
@@ -707,24 +708,24 @@ proptest! {
         let mut listener = SrtConnection::new_listener(make_opts(2));
         establish_connection(&mut caller, &mut listener, &mut now);
 
-        caller.send(&payload, now).unwrap();
+        caller.send(&payload, now).expect("送信は成功する想定");
         let data_packets = drain_packets(&mut caller);
 
         now = Timestamp::from_micros(now.as_micros() + 200_000);
 
         for pkt in &data_packets {
-            listener.feed_recv_buf(pkt, now).unwrap();
+            listener.feed_recv_buf(pkt, now).expect("受信バッファへのフィードは成功する想定");
         }
 
         // ACK タイマー発火
-        listener.handle_timer(TimerId::Ack, now).unwrap();
+        listener.handle_timer(TimerId::Ack, now).expect("タイマー処理は成功する想定");
         let ack_packets = drain_packets(&mut listener);
 
         prop_assert!(!ack_packets.is_empty(), "ACK must be sent");
 
         // Caller が ACK を受信
         for pkt in &ack_packets {
-            caller.feed_recv_buf(pkt, now).unwrap();
+            caller.feed_recv_buf(pkt, now).expect("受信バッファへのフィードは成功する想定");
         }
 
         // ACKACK が送信される（Full ACK に対して）
@@ -748,20 +749,20 @@ proptest! {
 
         for i in 0..chunk_count {
             let payload = vec![i as u8; 200];
-            caller.send(&payload, now).unwrap();
+            caller.send(&payload, now).expect("送信は成功する想定");
             let packets = drain_packets(&mut caller);
 
             now = Timestamp::from_micros(now.as_micros() + 50_000);
 
             for pkt in &packets {
-                listener.feed_recv_buf(pkt, now).unwrap();
+                listener.feed_recv_buf(pkt, now).expect("受信バッファへのフィードは成功する想定");
             }
 
-            listener.handle_timer(TimerId::Ack, now).unwrap();
+            listener.handle_timer(TimerId::Ack, now).expect("タイマー処理は成功する想定");
             let ack_packets = drain_packets(&mut listener);
 
             for pkt in &ack_packets {
-                caller.feed_recv_buf(pkt, now).unwrap();
+                caller.feed_recv_buf(pkt, now).expect("受信バッファへのフィードは成功する想定");
             }
             drain_packets(&mut caller);
         }
@@ -867,15 +868,15 @@ proptest! {
 
         // MTU に近いサイズ
         let payload = vec![0xFF; 1316];
-        caller.send(&payload, now).unwrap();
+        caller.send(&payload, now).expect("送信は成功する想定");
         let packets = drain_packets(&mut caller);
 
         now = Timestamp::from_micros(now.as_micros() + 200_000);
 
         for pkt in &packets {
-            listener.feed_recv_buf(pkt, now).unwrap();
+            listener.feed_recv_buf(pkt, now).expect("受信バッファへのフィードは成功する想定");
         }
-        listener.handle_timer(TimerId::Ack, now).unwrap();
+        listener.handle_timer(TimerId::Ack, now).expect("タイマー処理は成功する想定");
 
         let received = extract_received_data(&drain_events(&mut listener));
         prop_assert_eq!(received, payload);
@@ -893,15 +894,15 @@ proptest! {
         establish_connection(&mut caller, &mut listener, &mut now);
 
         let payload = vec![byte];
-        caller.send(&payload, now).unwrap();
+        caller.send(&payload, now).expect("送信は成功する想定");
         let packets = drain_packets(&mut caller);
 
         now = Timestamp::from_micros(now.as_micros() + 200_000);
 
         for pkt in &packets {
-            listener.feed_recv_buf(pkt, now).unwrap();
+            listener.feed_recv_buf(pkt, now).expect("受信バッファへのフィードは成功する想定");
         }
-        listener.handle_timer(TimerId::Ack, now).unwrap();
+        listener.handle_timer(TimerId::Ack, now).expect("タイマー処理は成功する想定");
 
         let received = extract_received_data(&drain_events(&mut listener));
         prop_assert_eq!(received, payload);
@@ -917,19 +918,19 @@ proptest! {
         let mut caller = SrtConnection::new_caller(make_opts(1));
         let mut listener = SrtConnection::new_listener(make_opts(2));
 
-        caller.connect(now).unwrap();
+        caller.connect(now).expect("接続は成功する想定");
 
         let induction_req = drain_packets(&mut caller);
-        listener.feed_recv_buf(&induction_req[0], now).unwrap();
+        listener.feed_recv_buf(&induction_req[0], now).expect("受信バッファへのフィードは成功する想定");
         let induction_resp = drain_packets(&mut listener);
 
         now = Timestamp::from_micros(now.as_micros() + 1000);
-        caller.feed_recv_buf(&induction_resp[0], now).unwrap();
+        caller.feed_recv_buf(&induction_resp[0], now).expect("受信バッファへのフィードは成功する想定");
 
         let conclusion_req = drain_packets(&mut caller);
-        listener.feed_recv_buf(&conclusion_req[0], now).unwrap();
+        listener.feed_recv_buf(&conclusion_req[0], now).expect("受信バッファへのフィードは成功する想定");
         let conclusion_resp = drain_packets(&mut listener);
-        caller.feed_recv_buf(&conclusion_resp[0], now).unwrap();
+        caller.feed_recv_buf(&conclusion_resp[0], now).expect("受信バッファへのフィードは成功する想定");
 
         prop_assert_eq!(caller.state(), ConnectionState::Connected);
         prop_assert_eq!(listener.state(), ConnectionState::Connected);

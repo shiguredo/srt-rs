@@ -17,6 +17,7 @@ use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::net::UdpSocket;
 use tokio::time::Instant;
+use tracing::{error, info, warn};
 
 mod ts_to_mp4;
 
@@ -91,8 +92,8 @@ fn print_receiver_stats(conn: &SrtConnection) {
         let loss_rate = stats.loss_rate_percent_x100 as f64 / 100.0;
         let rtt_ms = stats.rtt as f64 / 1000.0;
         let jitter_ms = stats.jitter as f64 / 1000.0;
-        eprintln!(
-            "[Stats] recv: {} pkts ({} bytes), lost: {}, loss: {:.2}%, RTT: {:.1}ms, jitter: {:.1}ms",
+        info!(
+            "stats: recv: {} pkts ({} bytes), lost: {}, loss: {:.2}%, RTT: {:.1}ms, jitter: {:.1}ms",
             stats.total_received,
             stats.total_bytes_received,
             stats.total_lost,
@@ -115,7 +116,7 @@ fn generate_output_basename() -> String {
 /// 受信データを保存
 fn save_received_data(ts_buffer: &[u8], save_mp4: bool) {
     if ts_buffer.is_empty() {
-        eprintln!("No data received, skipping save");
+        warn!("no data received, skipping save");
         return;
     }
 
@@ -125,27 +126,27 @@ fn save_received_data(ts_buffer: &[u8], save_mp4: bool) {
     let ts_path = PathBuf::from(format!("{}.ts", basename));
     match std::fs::write(&ts_path, ts_buffer) {
         Ok(()) => {
-            eprintln!(
-                "[TS] Saved {} bytes to {}",
+            info!(
+                "ts: saved {} bytes to {}",
                 ts_buffer.len(),
                 ts_path.display()
             );
         }
         Err(e) => {
-            eprintln!("[TS] Failed to save: {}", e);
+            error!("ts: failed to save: {}", e);
         }
     }
 
     // MP4 に変換して保存 (オプション)
     if save_mp4 {
         let mp4_path = PathBuf::from(format!("{}.mp4", basename));
-        eprintln!("[MP4] Converting to MP4...");
+        info!("mp4: converting to MP4...");
         match ts_to_mp4::convert_ts_to_mp4(ts_buffer, &mp4_path) {
             Ok(()) => {
-                eprintln!("[MP4] Saved to {}", mp4_path.display());
+                info!("mp4: saved to {}", mp4_path.display());
             }
             Err(e) => {
-                eprintln!("[MP4] Conversion failed: {}", e);
+                error!("mp4: conversion failed: {}", e);
             }
         }
     }
@@ -175,14 +176,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bind_addr: SocketAddr = format!("{}:{}", args.host, args.port).parse()?;
     let save_mp4 = args.mp4;
 
-    eprintln!("Listening on {}", bind_addr);
+    info!("listening on {}", bind_addr);
     if args.passphrase.is_some() {
-        eprintln!("Encryption: enabled (AES-128)");
+        info!("encryption: enabled (AES-128)");
     }
     if save_mp4 {
-        eprintln!("Output: TS + MP4");
+        info!("output: TS + MP4");
     } else {
-        eprintln!("Output: TS");
+        info!("output: TS");
     }
 
     let socket = UdpSocket::bind(bind_addr).await?;
@@ -249,23 +250,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // 初回接続時にピアアドレスを記録
                 if peer_addr.is_none() {
                     peer_addr = Some(addr);
-                    eprintln!("Connection from {}", addr);
+                    info!("connection from {}", addr);
                 }
 
                 let now = now_timestamp(base_time);
                 if let Err(e) = conn.feed_recv_buf(&buf[..len], now) {
-                    eprintln!("Error: {}", e);
+                    error!("recv error: {}", e);
                 }
             }
 
             // タイマー発火
             _ = tokio::time::sleep(timeout_duration), if next_timer.is_some() => {
-                let (timer_id, _) = next_timer.unwrap();
+                let (timer_id, _) = next_timer
+                    .expect("next timer should be present when the timer guard is active");
                 timers.remove(&timer_id);
 
                 let now = now_timestamp(base_time);
                 if let Err(e) = conn.handle_timer(timer_id, now) {
-                    eprintln!("Timer error: {}", e);
+                    error!("timer error: {}", e);
                 }
             }
 
@@ -279,7 +281,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         while let Some(event) = conn.poll_event() {
             match event {
                 ConnectionEvent::Connected => {
-                    eprintln!("Connected");
+                    info!("connected");
                     connected = true;
                     ts_buffer.clear();
                 }
@@ -289,16 +291,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 ConnectionEvent::StateChanged(state) => {
                     if state == ConnectionState::Disconnected {
-                        eprintln!("Disconnected");
+                        info!("disconnected");
                         save_received_data(&ts_buffer, save_mp4);
                         return Ok(());
                     }
                 }
                 ConnectionEvent::Error(msg) => {
-                    eprintln!("Error: {}", msg);
+                    error!("connection error: {}", msg);
                 }
                 ConnectionEvent::Disconnected { reason } => {
-                    eprintln!("Disconnected: {}", reason);
+                    info!("disconnected: {}", reason);
                     save_received_data(&ts_buffer, save_mp4);
                     return Ok(());
                 }

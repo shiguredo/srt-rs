@@ -30,7 +30,7 @@ proptest! {
 
         let packet = buf.push(payload.clone(), 100, 12345, now);
         prop_assert!(packet.is_some());
-        let pkt = packet.unwrap();
+        let pkt = packet.expect("送信パケットは Some になる想定");
         prop_assert_eq!(pkt.sequence_number, initial_seq);
         prop_assert_eq!(pkt.payload.len(), payload_len);
         prop_assert_eq!(buf.next_sequence_number(), (initial_seq + 1) & 0x7FFF_FFFF);
@@ -119,7 +119,7 @@ proptest! {
         // 再送パケットを取得
         let retransmit = buf.pop_retransmit(now);
         prop_assert!(retransmit.is_some());
-        let pkt = retransmit.unwrap();
+        let pkt = retransmit.expect("再送パケットは Some になる想定");
         prop_assert_eq!(pkt.sequence_number, lost_seq);
         prop_assert!(pkt.retransmitted);
 
@@ -265,7 +265,11 @@ proptest! {
         // 最古のパケット時刻を取得
         let oldest = buf.oldest_packet_time();
         prop_assert!(oldest.is_some());
-        prop_assert_eq!(oldest.unwrap().as_micros(), 1000);
+        prop_assert_eq!(
+            oldest.expect("最古パケット時刻は Some になる想定")
+                .as_micros(),
+            1000
+        );
     }
 
     #[test]

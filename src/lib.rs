@@ -9,7 +9,10 @@ mod srt_sender;
 pub mod stream_id;
 mod time;
 
-pub use buf::{ByteSliceExt, VecExt};
+pub use buf::{
+    read_bytes, read_u8, read_u16, read_u32, read_u64, read_utf8, write_bytes, write_u8, write_u16,
+    write_u32, write_u64,
+};
 pub use crypto::{CryptoContext, KeyFlag, KeyLength, KmRefreshState};
 pub use error::{Error, ErrorKind};
 pub use srt_connection::{

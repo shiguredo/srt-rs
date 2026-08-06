@@ -16,6 +16,7 @@ use mpeg2ts::ts::{
 use shiguredo_mp4::TrackKind;
 use shiguredo_mp4::boxes::SampleEntry;
 use shiguredo_mp4::demux::{DemuxError, Input, Mp4FileDemuxer};
+use tracing::info;
 
 /// MPEG2-TS のタイムスケール (90kHz)
 const TS_TIMESCALE: u64 = 90000;
@@ -93,7 +94,7 @@ struct AudioCodec {
     profile: u8,
     sampling_frequency_index: u8,
     channel_configuration: u8,
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     sample_rate: u32,
 }
 
@@ -159,8 +160,8 @@ impl Mp4ToTsConverter {
             ));
         }
 
-        eprintln!(
-            "[MP4->TS] Found {} tracks (video: {:?}, audio: {:?})",
+        info!(
+            "mp4->ts: found {} tracks (video: {:?}, audio: {:?})",
             tracks.len(),
             video_track_id,
             audio_track_id
@@ -258,7 +259,7 @@ impl Mp4ToTsConverter {
         Ok(final_output)
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn process_sample_data(
         &mut self,
         track_id: u32,
@@ -658,8 +659,8 @@ impl Mp4ToTsConverter {
                 let max_data = available.saturating_sub(pes_header_total);
                 let chunk_len = max_data.min(sample.data.len() - data_offset);
 
-                let pes_bytes =
-                    Bytes::new(&sample.data[data_offset..data_offset + chunk_len]).unwrap();
+                let pes_bytes = Bytes::new(&sample.data[data_offset..data_offset + chunk_len])
+                    .expect("chunk range is within sample data");
                 let pes = Pes {
                     header: pes_header.clone(),
                     pes_packet_len,
@@ -674,8 +675,8 @@ impl Mp4ToTsConverter {
             } else {
                 // 継続パケットは Raw データ
                 let chunk_len = available.min(sample.data.len() - data_offset);
-                let raw_bytes =
-                    Bytes::new(&sample.data[data_offset..data_offset + chunk_len]).unwrap();
+                let raw_bytes = Bytes::new(&sample.data[data_offset..data_offset + chunk_len])
+                    .expect("chunk range is within sample data");
                 data_offset += chunk_len;
                 (
                     Some(TsPayload::Raw(raw_bytes)),

@@ -18,7 +18,7 @@ proptest! {
         payload_data in prop::collection::vec(any::<u8>(), 16..1400),
         packet_index in 0u32..1000000,
     ) {
-        let salt_arr: [u8; 16] = salt.try_into().unwrap();
+        let salt_arr: [u8; 16] = salt.try_into().expect("salt は 16 バイトに変換できる想定");
         let sek = generate_sek(key_length);
         let mut sender = CryptoContext::new_sender(&passphrase, key_length, salt_arr, &sek).expect("sender creation should succeed");
 
@@ -51,7 +51,7 @@ proptest! {
         payload_data in prop::collection::vec(1u8..=255, 16..1400),
         packet_index in 0u32..1000000,
     ) {
-        let salt_arr: [u8; 16] = salt.try_into().unwrap();
+        let salt_arr: [u8; 16] = salt.try_into().expect("salt は 16 バイトに変換できる想定");
         let sek = generate_sek(key_length);
         let mut ctx = CryptoContext::new_sender(&passphrase, key_length, salt_arr, &sek).expect("creation should succeed");
 
@@ -71,7 +71,7 @@ proptest! {
         packet_index1 in 0u32..500000,
         packet_index2 in 500001u32..1000000,
     ) {
-        let salt_arr: [u8; 16] = salt.try_into().unwrap();
+        let salt_arr: [u8; 16] = salt.try_into().expect("salt は 16 バイトに変換できる想定");
         let sek = generate_sek(key_length);
         let mut ctx = CryptoContext::new_sender(&passphrase, key_length, salt_arr, &sek).expect("creation should succeed");
 
@@ -130,7 +130,7 @@ proptest! {
         key_length in prop::sample::select(vec![KeyLength::Aes128, KeyLength::Aes256]),
         salt in prop::collection::vec(any::<u8>(), 16..=16),
     ) {
-        let salt_arr: [u8; 16] = salt.try_into().unwrap();
+        let salt_arr: [u8; 16] = salt.try_into().expect("salt は 16 バイトに変換できる想定");
         let sek = generate_sek(key_length);
         let sender = CryptoContext::new_sender(&passphrase, key_length, salt_arr, &sek).expect("sender creation should succeed");
 
@@ -165,7 +165,7 @@ proptest! {
     ) {
         let key_flag = KeyFlag::from_kk_field(value);
         prop_assert!(key_flag.is_some());
-        let flag = key_flag.unwrap();
+        let flag = key_flag.expect("キーフラグは Some になる想定");
         prop_assert_eq!(flag.to_kk_field(), value);
     }
 
@@ -187,7 +187,7 @@ proptest! {
         let value = (upper_nibble << 2) | lower_bits;
         let key_flag = KeyFlag::from_kk_field(value);
         prop_assert!(key_flag.is_some());
-        let flag = key_flag.unwrap();
+        let flag = key_flag.expect("キーフラグは Some になる想定");
         prop_assert_eq!(flag.to_kk_field(), lower_bits);
     }
 
@@ -209,7 +209,7 @@ proptest! {
     ) {
         let key_length = KeyLength::from_encryption_field(value);
         prop_assert!(key_length.is_some());
-        let kl = key_length.unwrap();
+        let kl = key_length.expect("鍵長は Some になる想定");
         prop_assert_eq!(kl.to_encryption_field(), value);
     }
 
@@ -242,7 +242,7 @@ proptest! {
     ) {
         prop_assume!(passphrase1 != passphrase2);
 
-        let salt_arr: [u8; 16] = salt.try_into().unwrap();
+        let salt_arr: [u8; 16] = salt.try_into().expect("salt は 16 バイトに変換できる想定");
         let sek = generate_sek(key_length);
         let sender = CryptoContext::new_sender(&passphrase1, key_length, salt_arr, &sek).expect("sender creation should succeed");
         let key_flag = sender.current_key();
@@ -267,7 +267,7 @@ proptest! {
         key_length in prop::sample::select(vec![KeyLength::Aes128, KeyLength::Aes256]),
         salt in prop::collection::vec(any::<u8>(), 16..=16),
     ) {
-        let salt_arr: [u8; 16] = salt.try_into().unwrap();
+        let salt_arr: [u8; 16] = salt.try_into().expect("salt は 16 バイトに変換できる想定");
         let sek = generate_sek(key_length);
         let mut crypto = CryptoContext::new_sender(&passphrase, key_length, salt_arr, &sek).expect("creation should succeed");
 
@@ -312,7 +312,7 @@ proptest! {
         payload_data in prop::collection::vec(any::<u8>(), 16..256),
         packet_index in 0u32..1000000,
     ) {
-        let salt_arr: [u8; 16] = salt.try_into().unwrap();
+        let salt_arr: [u8; 16] = salt.try_into().expect("salt は 16 バイトに変換できる想定");
         let sek = generate_sek(key_length);
         let mut sender = CryptoContext::new_sender(&passphrase, key_length, salt_arr, &sek).expect("sender creation should succeed");
 
@@ -355,7 +355,7 @@ proptest! {
         salt in prop::collection::vec(any::<u8>(), 16..=16),
         packet_index in 0u32..1000000,
     ) {
-        let salt_arr: [u8; 16] = salt.try_into().unwrap();
+        let salt_arr: [u8; 16] = salt.try_into().expect("salt は 16 バイトに変換できる想定");
         let sek = generate_sek(key_length);
         let mut ctx = CryptoContext::new_sender(&passphrase, key_length, salt_arr, &sek).expect("creation should succeed");
 
@@ -372,7 +372,7 @@ proptest! {
         key_length in prop::sample::select(vec![KeyLength::Aes128, KeyLength::Aes256]),
         salt in prop::collection::vec(any::<u8>(), 16..=16),
     ) {
-        let salt_arr: [u8; 16] = salt.try_into().unwrap();
+        let salt_arr: [u8; 16] = salt.try_into().expect("salt は 16 バイトに変換できる想定");
         let sek = generate_sek(key_length);
         let mut crypto = CryptoContext::new_sender(&passphrase, key_length, salt_arr, &sek).expect("creation should succeed");
 
@@ -392,7 +392,7 @@ proptest! {
         salt in prop::collection::vec(any::<u8>(), 16..=16),
         payload_data in prop::collection::vec(any::<u8>(), 32..256),
     ) {
-        let salt_arr: [u8; 16] = salt.try_into().unwrap();
+        let salt_arr: [u8; 16] = salt.try_into().expect("salt は 16 バイトに変換できる想定");
         let sek = generate_sek(key_length);
         let mut ctx = CryptoContext::new_sender(&passphrase, key_length, salt_arr, &sek).expect("creation should succeed");
 
@@ -414,7 +414,7 @@ proptest! {
         salt in prop::collection::vec(any::<u8>(), 16..=16),
         payload_data in prop::collection::vec(any::<u8>(), 16..256),
     ) {
-        let salt_arr: [u8; 16] = salt.try_into().unwrap();
+        let salt_arr: [u8; 16] = salt.try_into().expect("salt は 16 バイトに変換できる想定");
         let sek = generate_sek(key_length);
         let mut sender = CryptoContext::new_sender(&passphrase, key_length, salt_arr, &sek).expect("sender creation should succeed");
         let key_flag = sender.current_key();

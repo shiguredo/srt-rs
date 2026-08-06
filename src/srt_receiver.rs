@@ -240,7 +240,7 @@ struct ReceivedPacket {
     /// パケットデータ
     packet: DataPacket,
     /// 受信時刻 (統計・ジッター計算用)
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     recv_time: Timestamp,
     /// 配信予定時刻 (TSBPD)
     delivery_time: Timestamp,
@@ -772,7 +772,7 @@ mod tests {
         let losses = buf.receive(make_packet(1002, 300), now);
 
         assert!(losses.is_some());
-        let lost = losses.unwrap();
+        let lost = losses.expect("欠落パケットは Some になる想定");
         assert_eq!(lost, vec![1001]);
     }
 
@@ -806,11 +806,19 @@ mod tests {
 
         let pkt = buf.pop_ready(now);
         assert!(pkt.is_some());
-        assert_eq!(pkt.unwrap().sequence_number, 1000);
+        assert_eq!(
+            pkt.expect("配信可能パケットは Some になる想定")
+                .sequence_number,
+            1000
+        );
 
         let pkt = buf.pop_ready(now);
         assert!(pkt.is_some());
-        assert_eq!(pkt.unwrap().sequence_number, 1001);
+        assert_eq!(
+            pkt.expect("配信可能パケットは Some になる想定")
+                .sequence_number,
+            1001
+        );
     }
 
     #[test]
@@ -840,7 +848,10 @@ mod tests {
 
         let nak = buf.generate_periodic_nak();
         assert!(nak.is_some());
-        assert_eq!(nak.unwrap().loss_list, vec![1001]);
+        assert_eq!(
+            nak.expect("欠落パケットは NAK が生成される想定").loss_list,
+            vec![1001]
+        );
     }
 
     #[test]
@@ -1130,7 +1141,12 @@ mod tests {
         //                = 500_000 + 200_000 + 120_000 = 820_000μs
         // now=1_500_000 > 820_000 なので配送される
         assert!(delivered.is_some());
-        assert_eq!(delivered.unwrap().sequence_number, 1000);
+        assert_eq!(
+            delivered
+                .expect("配信可能パケットは Some になる想定")
+                .sequence_number,
+            1000
+        );
     }
 
     #[test]

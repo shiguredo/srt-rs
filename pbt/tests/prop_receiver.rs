@@ -104,7 +104,7 @@ proptest! {
         let losses = buf.receive(make_packet(skip_seq, 200), now);
 
         prop_assert!(losses.is_some());
-        let lost = losses.unwrap();
+        let lost = losses.expect("欠落パケットは Some になる想定");
         prop_assert_eq!(lost.len(), gap as usize);
     }
 
@@ -214,7 +214,12 @@ proptest! {
         // NAK を生成
         let nak = buf.generate_periodic_nak();
         prop_assert!(nak.is_some());
-        prop_assert_eq!(nak.unwrap().loss_list.len(), gap as usize);
+        prop_assert_eq!(
+            nak.expect("欠落パケットは NAK が生成される想定")
+                .loss_list
+                .len(),
+            gap as usize
+        );
     }
 
     #[test]
@@ -369,7 +374,12 @@ proptest! {
 
         prop_assert!(nak1.is_some());
         prop_assert!(nak2.is_some());
-        prop_assert_eq!(nak1.unwrap().loss_list, nak2.unwrap().loss_list);
+        prop_assert_eq!(
+            nak1.expect("欠落パケットは NAK が生成される想定")
+                .loss_list,
+            nak2.expect("欠落パケットは NAK が生成される想定")
+                .loss_list
+        );
     }
 
     #[test]

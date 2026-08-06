@@ -3,7 +3,7 @@
 //! SRT パケットは UDP ペイロードとして送信される。
 //! F ビット (最上位ビット) でデータパケット (0) と制御パケット (1) を区別する。
 
-use crate::buf::{ByteSliceExt, VecExt};
+use crate::buf::{read_u32, write_bytes, write_u32};
 use crate::error::Error;
 
 /// SRT パケットの最小ヘッダサイズ (16 bytes)
@@ -45,7 +45,7 @@ impl SrtPacket {
         Error::check_buffer_size(SRT_HEADER_SIZE, buf)?;
 
         let mut slice = buf;
-        let first_word = slice.read_u32()?;
+        let first_word = read_u32(&mut slice)?;
 
         if PacketType::from_first_word(first_word) == PacketType::Data {
             // データパケットとしてデコード
@@ -92,8 +92,8 @@ impl PacketPosition {
     }
 
     /// PP フィールド値へ変換
-    pub fn to_bits(&self) -> u8 {
-        *self as u8
+    pub fn to_bits(self) -> u8 {
+        self as u8
     }
 }
 
@@ -152,15 +152,15 @@ impl DataPacket {
 
         let sequence_number = first_word & 0x7FFF_FFFF;
 
-        let second_word = slice.read_u32()?;
+        let second_word = read_u32(&mut slice)?;
         let position = PacketPosition::from_bits(((second_word >> 30) & 0b11) as u8);
         let order_flag = (second_word >> 29) & 1 != 0;
         let encryption_flag = ((second_word >> 27) & 0b11) as u8;
         let retransmitted = (second_word >> 26) & 1 != 0;
         let message_number = second_word & 0x03FF_FFFF;
 
-        let timestamp = slice.read_u32()?;
-        let dest_socket_id = slice.read_u32()?;
+        let timestamp = read_u32(&mut slice)?;
+        let dest_socket_id = read_u32(&mut slice)?;
 
         let payload = slice.to_vec();
 
@@ -181,7 +181,7 @@ impl DataPacket {
     pub fn encode(&self, buf: &mut Vec<u8>) {
         // First word: F=0, sequence_number
         let first_word = self.sequence_number & 0x7FFF_FFFF;
-        buf.write_u32(first_word);
+        write_u32(buf, first_word);
 
         // Second word: PP, O, KK, R, message_number
         let second_word = ((self.position.to_bits() as u32) << 30)
@@ -189,11 +189,11 @@ impl DataPacket {
             | ((self.encryption_flag as u32 & 0b11) << 27)
             | ((self.retransmitted as u32) << 26)
             | (self.message_number & 0x03FF_FFFF);
-        buf.write_u32(second_word);
+        write_u32(buf, second_word);
 
-        buf.write_u32(self.timestamp);
-        buf.write_u32(self.dest_socket_id);
-        buf.write_bytes(&self.payload);
+        write_u32(buf, self.timestamp);
+        write_u32(buf, self.dest_socket_id);
+        write_bytes(buf, &self.payload);
     }
 
     /// エンコード後のサイズを取得
@@ -290,9 +290,9 @@ impl ControlPacket {
         })?;
         let subtype = (first_word & 0xFFFF) as u16;
 
-        let type_specific_info = slice.read_u32()?;
-        let timestamp = slice.read_u32()?;
-        let dest_socket_id = slice.read_u32()?;
+        let type_specific_info = read_u32(&mut slice)?;
+        let timestamp = read_u32(&mut slice)?;
+        let dest_socket_id = read_u32(&mut slice)?;
 
         let control_info = slice.to_vec();
 
@@ -312,12 +312,12 @@ impl ControlPacket {
         let first_word = 0x8000_0000
             | ((self.control_type as u32 & 0x7FFF) << 16)
             | (self.subtype as u32 & 0xFFFF);
-        buf.write_u32(first_word);
+        write_u32(buf, first_word);
 
-        buf.write_u32(self.type_specific_info);
-        buf.write_u32(self.timestamp);
-        buf.write_u32(self.dest_socket_id);
-        buf.write_bytes(&self.control_info);
+        write_u32(buf, self.type_specific_info);
+        write_u32(buf, self.timestamp);
+        write_u32(buf, self.dest_socket_id);
+        write_bytes(buf, &self.control_info);
     }
 
     /// エンコード後のサイズを取得
@@ -358,7 +358,9 @@ mod tests {
         let mut buf = Vec::new();
         original.encode(&mut buf);
 
-        let decoded = match SrtPacket::decode(&buf).unwrap() {
+        let decoded = match SrtPacket::decode(&buf)
+            .expect("エンコード済みパケットのデコードは成功する想定")
+        {
             SrtPacket::Data(pkt) => pkt,
             _ => panic!("expected data packet"),
         };
@@ -380,7 +382,9 @@ mod tests {
         let mut buf = Vec::new();
         original.encode(&mut buf);
 
-        let decoded = match SrtPacket::decode(&buf).unwrap() {
+        let decoded = match SrtPacket::decode(&buf)
+            .expect("エンコード済みパケットのデコードは成功する想定")
+        {
             SrtPacket::Control(pkt) => pkt,
             _ => panic!("expected control packet"),
         };

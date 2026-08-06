@@ -19,6 +19,7 @@ use shiguredo_srt::{
 };
 use tokio::net::UdpSocket;
 use tokio::time::Instant;
+use tracing::{error, info};
 
 mod mp4_to_ts;
 
@@ -101,8 +102,8 @@ fn parse_args() -> noargs::Result<Option<Args>> {
 /// 統計情報を表示
 fn print_sender_stats(conn: &SrtConnection) {
     if let Some(stats) = conn.sender_stats() {
-        eprintln!(
-            "[Stats] sent: {} pkts ({} bytes), retransmits: {}, in_buffer: {}, in_loss_list: {}",
+        info!(
+            "stats: sent: {} pkts ({} bytes), retransmits: {}, in_buffer: {}, in_loss_list: {}",
             stats.total_sent,
             stats.total_bytes_sent,
             stats.total_retransmits,
@@ -135,9 +136,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let target_addr: SocketAddr = format!("{}:{}", args.host, args.port).parse()?;
 
-    eprintln!("Connecting to {}", target_addr);
+    info!("connecting to {}", target_addr);
     if args.passphrase.is_some() {
-        eprintln!("Encryption: enabled (AES-128)");
+        info!("encryption: enabled (AES-128)");
     }
 
     // ローカルポートを自動割り当て
@@ -214,7 +215,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if let Some(input_path) = args.input {
         // MP4 ファイルから MPEG2-TS に変換して送信
-        eprintln!("Input: {} (MP4 -> MPEG2-TS)", input_path.display());
+        info!("input: {} (MP4 -> MPEG2-TS)", input_path.display());
 
         let tx = tx.clone();
         let save_ts = args.save_ts.clone();
@@ -222,16 +223,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             match mp4_to_ts::Mp4ToTsConverter::from_file(&input_path) {
                 Ok(mut converter) => match converter.convert() {
                     Ok(ts_data) => {
-                        eprintln!(
-                            "[MP4->TS] Converted {} bytes of MPEG2-TS data",
+                        info!(
+                            "mp4->ts: converted {} bytes of MPEG2-TS data",
                             ts_data.len()
                         );
 
                         // デバッグ用: TS ファイルを保存
                         if let Some(ref ts_path) = save_ts {
                             match std::fs::write(ts_path, &ts_data) {
-                                Ok(()) => eprintln!("[MP4->TS] Saved to: {}", ts_path.display()),
-                                Err(e) => eprintln!("[MP4->TS] Failed to save: {}", e),
+                                Ok(()) => info!("mp4->ts: saved to: {}", ts_path.display()),
+                                Err(e) => error!("mp4->ts: failed to save: {}", e),
                             }
                         }
 
@@ -248,17 +249,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     Err(e) => {
-                        eprintln!("[MP4->TS] Conversion error: {}", e);
+                        error!("mp4->ts: conversion error: {}", e);
                     }
                 },
                 Err(e) => {
-                    eprintln!("[MP4->TS] Failed to open file: {}", e);
+                    error!("mp4->ts: failed to open file: {}", e);
                 }
             }
         });
     } else {
         // 標準入力からデータを読み込む
-        eprintln!("Input: stdin (MPEG2-TS)");
+        info!("input: stdin (MPEG2-TS)");
 
         std::thread::spawn(move || {
             let mut stdin = std::io::stdin();
@@ -272,7 +273,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     Err(e) => {
-                        eprintln!("stdin read error: {}", e);
+                        error!("stdin read error: {}", e);
                         break;
                     }
                 }
@@ -307,7 +308,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let len = result?;
                 let now = now_timestamp(base_time);
                 if let Err(e) = conn.feed_recv_buf(&buf[..len], now) {
-                    eprintln!("Error: {}", e);
+                    error!("recv error: {}", e);
                 }
             }
 
@@ -317,12 +318,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Some(data) => {
                         let now = now_timestamp(base_time);
                         if let Err(e) = conn.send(&data, now) {
-                            eprintln!("Send error: {}", e);
+                            error!("send error: {}", e);
                         }
                     }
                     None => {
                         // チャンネルが閉じた = 全データ送信完了
-                        eprintln!("All data sent, closing connection...");
+                        info!("all data sent, closing connection...");
                         let now = now_timestamp(base_time);
                         conn.disconnect(now);
                     }
@@ -331,12 +332,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // タイマー発火
             _ = tokio::time::sleep(timeout_duration), if next_timer.is_some() => {
-                let (timer_id, _) = next_timer.unwrap();
+                let (timer_id, _) = next_timer
+                    .expect("next timer should be present when the timer guard is active");
                 timers.remove(&timer_id);
 
                 let now = now_timestamp(base_time);
                 if let Err(e) = conn.handle_timer(timer_id, now) {
-                    eprintln!("Timer error: {}", e);
+                    error!("timer error: {}", e);
                 }
             }
 
@@ -350,7 +352,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         while let Some(event) = conn.poll_event() {
             match event {
                 ConnectionEvent::Connected => {
-                    eprintln!("Connected");
+                    info!("connected");
                     connected = true;
                 }
                 ConnectionEvent::DataReceived { .. } => {
@@ -358,15 +360,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 ConnectionEvent::StateChanged(state) => {
                     if state == ConnectionState::Disconnected {
-                        eprintln!("Disconnected");
+                        info!("disconnected");
                         return Ok(());
                     }
                 }
                 ConnectionEvent::Error(msg) => {
-                    eprintln!("Error: {}", msg);
+                    error!("connection error: {}", msg);
                 }
                 ConnectionEvent::Disconnected { reason } => {
-                    eprintln!("Disconnected: {}", reason);
+                    info!("disconnected: {}", reason);
                     return Ok(());
                 }
                 ConnectionEvent::KeyRefreshNeeded { key_length } => {
@@ -375,7 +377,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     getrandom::fill(&mut new_sek).expect("failed to generate random SEK");
                     let now = now_timestamp(base_time);
                     if let Err(e) = conn.provide_new_sek(&new_sek, now) {
-                        eprintln!("Key refresh failed: {}", e);
+                        error!("key refresh failed: {}", e);
                     }
                 }
             }

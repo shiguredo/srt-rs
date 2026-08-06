@@ -50,7 +50,7 @@ pub struct SenderBuffer {
     congestion_window: u32,
 
     /// バッファ最大サイズ (パケット数)
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     max_buffer_size: u32,
 
     /// レイテンシ (マイクロ秒)
@@ -445,7 +445,7 @@ mod tests {
 
         let packet = buf.push(vec![1, 2, 3], 100, 12345, now);
         assert!(packet.is_some());
-        let pkt = packet.unwrap();
+        let pkt = packet.expect("送信パケットは Some になる想定");
         assert_eq!(pkt.sequence_number, 1000);
         assert_eq!(buf.next_sequence_number(), 1001);
         assert_eq!(buf.packets_in_flight(), 1);
@@ -484,7 +484,7 @@ mod tests {
         // 再送パケットを取得
         let retransmit = buf.pop_retransmit(now);
         assert!(retransmit.is_some());
-        let pkt = retransmit.unwrap();
+        let pkt = retransmit.expect("再送パケットは Some になる想定");
         assert_eq!(pkt.sequence_number, 1001);
         assert!(pkt.retransmitted);
     }

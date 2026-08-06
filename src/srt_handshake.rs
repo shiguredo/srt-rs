@@ -17,7 +17,9 @@
 
 use std::net::IpAddr;
 
-use crate::buf::{ByteSliceExt, VecExt};
+use crate::buf::{
+    read_bytes, read_u8, read_u16, read_u32, write_bytes, write_u8, write_u16, write_u32,
+};
 use crate::crypto::{KeyFlag, KeyLength};
 use crate::error::Error;
 use crate::srt_packet::{ControlPacket, ControlType};
@@ -262,34 +264,34 @@ impl HandshakePacket {
         let mut buf = packet.control_info.as_slice();
         Error::check_buffer_size(48, buf)?; // 最小サイズ
 
-        let version = buf.read_u32()?;
-        let encryption_field = buf.read_u16()?;
-        let extension_field = buf.read_u16()?;
-        let initial_packet_seq = buf.read_u32()? & 0x7FFF_FFFF;
-        let mtu = buf.read_u32()?;
-        let flow_window = buf.read_u32()?;
-        let handshake_type_raw = buf.read_u32()?;
+        let version = read_u32(&mut buf)?;
+        let encryption_field = read_u16(&mut buf)?;
+        let extension_field = read_u16(&mut buf)?;
+        let initial_packet_seq = read_u32(&mut buf)? & 0x7FFF_FFFF;
+        let mtu = read_u32(&mut buf)?;
+        let flow_window = read_u32(&mut buf)?;
+        let handshake_type_raw = read_u32(&mut buf)?;
         let handshake_type = HandshakeType::from_u32(handshake_type_raw).ok_or_else(|| {
             Error::invalid_data(format!("unknown handshake type: {handshake_type_raw:#x}"))
         })?;
-        let socket_id = buf.read_u32()?;
-        let syn_cookie = buf.read_u32()?;
+        let socket_id = read_u32(&mut buf)?;
+        let syn_cookie = read_u32(&mut buf)?;
 
         // ピア IP (128 ビット = 16 バイト)
-        let ip_bytes = buf.read_bytes(16)?;
+        let ip_bytes = read_bytes(&mut buf, 16)?;
         let peer_ip = parse_peer_ip(&ip_bytes);
 
         // 拡張のパース
         let mut extensions = Vec::new();
         while buf.len() >= 4 {
-            let ext_type_raw = buf.read_u16()?;
-            let ext_len = buf.read_u16()? as usize * 4; // 4バイト単位
+            let ext_type_raw = read_u16(&mut buf)?;
+            let ext_len = read_u16(&mut buf)? as usize * 4; // 4バイト単位
 
             if buf.len() < ext_len {
                 break;
             }
 
-            let ext_data = buf.read_bytes(ext_len)?;
+            let ext_data = read_bytes(&mut buf, ext_len)?;
 
             if let Some(ext_type) = ExtensionType::from_u16(ext_type_raw) {
                 extensions.push(HandshakeExtension {
@@ -318,29 +320,29 @@ impl HandshakePacket {
     pub fn encode(&self, timestamp: u32, dest_socket_id: u32) -> ControlPacket {
         let mut control_info = Vec::new();
 
-        control_info.write_u32(self.version);
-        control_info.write_u16(self.encryption_field);
-        control_info.write_u16(self.extension_field);
-        control_info.write_u32(self.initial_packet_seq & 0x7FFF_FFFF);
-        control_info.write_u32(self.mtu);
-        control_info.write_u32(self.flow_window);
-        control_info.write_u32(self.handshake_type as u32);
-        control_info.write_u32(self.socket_id);
-        control_info.write_u32(self.syn_cookie);
+        write_u32(&mut control_info, self.version);
+        write_u16(&mut control_info, self.encryption_field);
+        write_u16(&mut control_info, self.extension_field);
+        write_u32(&mut control_info, self.initial_packet_seq & 0x7FFF_FFFF);
+        write_u32(&mut control_info, self.mtu);
+        write_u32(&mut control_info, self.flow_window);
+        write_u32(&mut control_info, self.handshake_type as u32);
+        write_u32(&mut control_info, self.socket_id);
+        write_u32(&mut control_info, self.syn_cookie);
 
         // Peer IP
         encode_peer_ip(&self.peer_ip, &mut control_info);
 
         // 拡張
         for ext in &self.extensions {
-            control_info.write_u16(ext.ext_type as u16);
+            write_u16(&mut control_info, ext.ext_type as u16);
             let len_in_words = ext.data.len().div_ceil(4);
-            control_info.write_u16(len_in_words as u16);
-            control_info.write_bytes(&ext.data);
+            write_u16(&mut control_info, len_in_words as u16);
+            write_bytes(&mut control_info, &ext.data);
             // パディング
             let padding = len_in_words * 4 - ext.data.len();
             for _ in 0..padding {
-                control_info.write_u8(0);
+                write_u8(&mut control_info, 0);
             }
         }
 
@@ -357,10 +359,10 @@ impl HandshakePacket {
     /// HSREQ 拡張を追加
     pub fn add_hs_extension(&mut self, srt_version: u32, srt_flags: u32, tsbpd_delay: u16) {
         let mut data = Vec::new();
-        data.write_u32(srt_version);
-        data.write_u32(srt_flags);
-        data.write_u16(tsbpd_delay); // Receiver TSBPD delay
-        data.write_u16(tsbpd_delay); // Sender TSBPD delay
+        write_u32(&mut data, srt_version);
+        write_u32(&mut data, srt_flags);
+        write_u16(&mut data, tsbpd_delay); // Receiver TSBPD delay
+        write_u16(&mut data, tsbpd_delay); // Sender TSBPD delay
 
         self.extensions.push(HandshakeExtension {
             ext_type: ExtensionType::HsReq,
@@ -371,10 +373,10 @@ impl HandshakePacket {
     /// HSRSP 拡張を追加
     pub fn add_hs_response(&mut self, srt_version: u32, srt_flags: u32, tsbpd_delay: u16) {
         let mut data = Vec::new();
-        data.write_u32(srt_version);
-        data.write_u32(srt_flags);
-        data.write_u16(tsbpd_delay);
-        data.write_u16(tsbpd_delay);
+        write_u32(&mut data, srt_version);
+        write_u32(&mut data, srt_flags);
+        write_u16(&mut data, tsbpd_delay);
+        write_u16(&mut data, tsbpd_delay);
 
         self.extensions.push(HandshakeExtension {
             ext_type: ExtensionType::HsRsp,
@@ -389,10 +391,10 @@ impl HandshakePacket {
                 && ext.data.len() >= 12
             {
                 let mut buf = ext.data.as_slice();
-                let srt_version = buf.read_u32().ok()?;
-                let srt_flags = buf.read_u32().ok()?;
-                let recv_tsbpd_delay = buf.read_u16().ok()?;
-                let send_tsbpd_delay = buf.read_u16().ok()?;
+                let srt_version = read_u32(&mut buf).ok()?;
+                let srt_flags = read_u32(&mut buf).ok()?;
+                let recv_tsbpd_delay = read_u16(&mut buf).ok()?;
+                let send_tsbpd_delay = read_u16(&mut buf).ok()?;
                 return Some(HsExtensionData {
                     srt_version,
                     srt_flags,
@@ -428,7 +430,7 @@ impl HandshakePacket {
     /// KMRSP エラー拡張を追加 (失敗時)
     pub fn add_km_error(&mut self, error: KmError) {
         let mut data = Vec::new();
-        data.write_u32(error as u32);
+        write_u32(&mut data, error as u32);
         self.extensions.push(HandshakeExtension {
             ext_type: ExtensionType::KmRsp,
             data,
@@ -542,7 +544,7 @@ fn encode_le_words(s: &str, max_len: usize) -> Vec<u8> {
 
 /// 32-bit little endian words 形式から文字列をデコードする
 fn decode_le_words(data: &[u8]) -> Option<String> {
-    let mut bytes = Vec::with_capacity(data.len());
+    let mut bytes = Vec::new();
 
     for chunk in data.chunks(4) {
         for i in (0..chunk.len()).rev() {
@@ -603,14 +605,14 @@ fn parse_peer_ip(bytes: &[u8]) -> IpAddr {
 fn encode_peer_ip(ip: &IpAddr, buf: &mut Vec<u8>) {
     match ip {
         IpAddr::V4(ipv4) => {
-            buf.write_bytes(&ipv4.octets());
+            write_bytes(buf, &ipv4.octets());
             // 残り 12 バイトは 0
             for _ in 0..12 {
-                buf.write_u8(0);
+                write_u8(buf, 0);
             }
         }
         IpAddr::V6(ipv6) => {
-            buf.write_bytes(&ipv6.octets());
+            write_bytes(buf, &ipv6.octets());
         }
     }
 }
@@ -671,7 +673,7 @@ const KM_VERSION: u8 = 1;
 const KM_PACKET_TYPE: u8 = 2;
 
 /// 暗号化方式
-#[allow(dead_code)]
+#[expect(dead_code)]
 pub mod cipher_type {
     /// AES-CTR
     pub const AES_CTR: u8 = 2;
@@ -713,30 +715,30 @@ impl KmMessage {
 
         // 最初の 4 バイト: S(1) | V(3) | PT(4) | Sign(16) | Resv1(6) | KK(2)
         let first_byte = (self.version << 4) | self.packet_type;
-        buf.write_u8(first_byte);
-        buf.write_u16(KM_SIGNATURE);
+        write_u8(&mut buf, first_byte);
+        write_u16(&mut buf, KM_SIGNATURE);
         // Resv1 (6 bits) | KK (2 bits)
-        buf.write_u8(self.key_flag.to_kk_field());
+        write_u8(&mut buf, self.key_flag.to_kk_field());
 
         // KEKI (32 bits)
-        buf.write_u32(self.keki);
+        write_u32(&mut buf, self.keki);
 
         // Cipher (8) | Auth (8) | SE (8) | Resv2 (8)
-        buf.write_u8(self.cipher);
-        buf.write_u8(self.auth);
-        buf.write_u8(self.stream_encapsulation);
-        buf.write_u8(0); // Resv2
+        write_u8(&mut buf, self.cipher);
+        write_u8(&mut buf, self.auth);
+        write_u8(&mut buf, self.stream_encapsulation);
+        write_u8(&mut buf, 0); // Resv2
 
         // Resv3 (16) | SLen/4 (8) | KLen/4 (8)
-        buf.write_u16(0); // Resv3
-        buf.write_u8(4); // SLen/4 = 16/4 = 4
-        buf.write_u8((self.key_length.len() / 4) as u8); // KLen/4
+        write_u16(&mut buf, 0); // Resv3
+        write_u8(&mut buf, 4); // SLen/4 = 16/4 = 4
+        write_u8(&mut buf, (self.key_length.len() / 4) as u8); // KLen/4
 
         // Salt (16 bytes)
-        buf.write_bytes(&self.salt);
+        write_bytes(&mut buf, &self.salt);
 
         // Wrapped Key
-        buf.write_bytes(&self.wrapped_key);
+        write_bytes(&mut buf, &self.wrapped_key);
 
         buf
     }
@@ -750,34 +752,34 @@ impl KmMessage {
         let mut buf = data;
 
         // 最初の 4 バイト
-        let first_byte = buf.read_u8()?;
+        let first_byte = read_u8(&mut buf)?;
         let version = (first_byte >> 4) & 0x07;
         let packet_type = first_byte & 0x0F;
 
-        let signature = buf.read_u16()?;
+        let signature = read_u16(&mut buf)?;
         if signature != KM_SIGNATURE {
             return Err(Error::invalid_data(format!(
                 "invalid KM signature: {signature:#06x}, expected {KM_SIGNATURE:#06x}"
             )));
         }
 
-        let kk_byte = buf.read_u8()?;
+        let kk_byte = read_u8(&mut buf)?;
         let key_flag = KeyFlag::from_kk_field(kk_byte)
             .ok_or_else(|| Error::invalid_data("invalid KK field"))?;
 
         // KEKI
-        let keki = buf.read_u32()?;
+        let keki = read_u32(&mut buf)?;
 
         // Cipher, Auth, SE, Resv2
-        let cipher = buf.read_u8()?;
-        let auth = buf.read_u8()?;
-        let stream_encapsulation = buf.read_u8()?;
-        let _resv2 = buf.read_u8()?;
+        let cipher = read_u8(&mut buf)?;
+        let auth = read_u8(&mut buf)?;
+        let stream_encapsulation = read_u8(&mut buf)?;
+        let _resv2 = read_u8(&mut buf)?;
 
         // Resv3, SLen/4, KLen/4
-        let _resv3 = buf.read_u16()?;
-        let slen_div4 = buf.read_u8()? as usize;
-        let klen_div4 = buf.read_u8()? as usize;
+        let _resv3 = read_u16(&mut buf)?;
+        let slen_div4 = read_u8(&mut buf)? as usize;
+        let klen_div4 = read_u8(&mut buf)? as usize;
 
         let slen = slen_div4 * 4;
         let klen = klen_div4 * 4;
@@ -795,7 +797,7 @@ impl KmMessage {
         if buf.len() < slen {
             return Err(Error::invalid_data("KM message too short for salt"));
         }
-        let salt_bytes = buf.read_bytes(slen)?;
+        let salt_bytes = read_bytes(&mut buf, slen)?;
         let mut salt = [0u8; 16];
         salt.copy_from_slice(&salt_bytes);
 
@@ -865,7 +867,8 @@ mod tests {
         };
 
         let packet = original.encode(1000, 0);
-        let decoded = HandshakePacket::decode(&packet).unwrap();
+        let decoded = HandshakePacket::decode(&packet)
+            .expect("エンコード済みハンドシェイクパケットのデコードは成功する想定");
 
         assert_eq!(original.version, decoded.version);
         assert_eq!(original.encryption_field, decoded.encryption_field);
@@ -884,9 +887,12 @@ mod tests {
         hs.add_hs_extension(0x010500, srt_flags::TSBPDSND | srt_flags::TSBPDRCV, 120);
 
         let packet = hs.encode(1000, 0);
-        let decoded = HandshakePacket::decode(&packet).unwrap();
+        let decoded = HandshakePacket::decode(&packet)
+            .expect("エンコード済みハンドシェイクパケットのデコードは成功する想定");
 
-        let ext = decoded.get_hs_extension().unwrap();
+        let ext = decoded
+            .get_hs_extension()
+            .expect("HS 拡張は Some になる想定");
         assert_eq!(ext.srt_version, 0x010500);
         assert_eq!(ext.srt_flags, srt_flags::TSBPDSND | srt_flags::TSBPDRCV);
         assert_eq!(ext.recv_tsbpd_delay, 120);
@@ -906,7 +912,8 @@ mod tests {
         let original = KmMessage::new(KeyFlag::Even, KeyLength::Aes128, salt, wrapped_key.clone());
 
         let encoded = original.encode();
-        let decoded = KmMessage::decode(&encoded).unwrap();
+        let decoded = KmMessage::decode(&encoded)
+            .expect("エンコード済み KM メッセージのデコードは成功する想定");
 
         assert_eq!(decoded.version, 1);
         assert_eq!(decoded.packet_type, 2);
@@ -929,12 +936,15 @@ mod tests {
         hs.add_km_request(&km_message);
 
         let packet = hs.encode(1000, 0);
-        let decoded = HandshakePacket::decode(&packet).unwrap();
+        let decoded = HandshakePacket::decode(&packet)
+            .expect("エンコード済みハンドシェイクパケットのデコードは成功する想定");
 
         // KM リクエストを取得
         let km_result = decoded.get_km_request();
         assert!(km_result.is_some());
-        let km = km_result.unwrap().unwrap();
+        let km = km_result
+            .expect("KM リクエストは Some になる想定")
+            .expect("KM メッセージのデコードは成功する想定");
         assert_eq!(km.key_flag, KeyFlag::Even);
         assert_eq!(km.key_length, KeyLength::Aes128);
     }
@@ -945,7 +955,8 @@ mod tests {
         hs.add_km_error(KmError::BadSecret);
 
         let packet = hs.encode(1000, 0);
-        let decoded = HandshakePacket::decode(&packet).unwrap();
+        let decoded = HandshakePacket::decode(&packet)
+            .expect("エンコード済みハンドシェイクパケットのデコードは成功する想定");
 
         let result = decoded.get_km_response();
         assert!(matches!(result, Err(KmError::BadSecret)));
@@ -957,7 +968,8 @@ mod tests {
         hs.add_sid_extension("test_stream");
 
         let packet = hs.encode(1000, 0);
-        let decoded = HandshakePacket::decode(&packet).unwrap();
+        let decoded = HandshakePacket::decode(&packet)
+            .expect("エンコード済みハンドシェイクパケットのデコードは成功する想定");
 
         let sid = decoded.get_sid_extension();
         assert_eq!(sid, Some("test_stream".to_string()));
@@ -969,7 +981,8 @@ mod tests {
         hs.add_sid_extension("#!::u=admin,r=live/stream1");
 
         let packet = hs.encode(1000, 0);
-        let decoded = HandshakePacket::decode(&packet).unwrap();
+        let decoded = HandshakePacket::decode(&packet)
+            .expect("エンコード済みハンドシェイクパケットのデコードは成功する想定");
 
         let sid = decoded.get_sid_extension();
         assert_eq!(sid, Some("#!::u=admin,r=live/stream1".to_string()));
@@ -982,7 +995,8 @@ mod tests {
         hs.add_sid_extension("hello");
 
         let packet = hs.encode(1000, 0);
-        let decoded = HandshakePacket::decode(&packet).unwrap();
+        let decoded = HandshakePacket::decode(&packet)
+            .expect("エンコード済みハンドシェイクパケットのデコードは成功する想定");
 
         let sid = decoded.get_sid_extension();
         assert_eq!(sid, Some("hello".to_string()));
@@ -995,7 +1009,8 @@ mod tests {
         hs.add_sid_extension("test");
 
         let packet = hs.encode(1000, 0);
-        let decoded = HandshakePacket::decode(&packet).unwrap();
+        let decoded = HandshakePacket::decode(&packet)
+            .expect("エンコード済みハンドシェイクパケットのデコードは成功する想定");
 
         let sid = decoded.get_sid_extension();
         assert_eq!(sid, Some("test".to_string()));
@@ -1009,7 +1024,8 @@ mod tests {
         hs.add_sid_extension(&long_sid);
 
         let packet = hs.encode(1000, 0);
-        let decoded = HandshakePacket::decode(&packet).unwrap();
+        let decoded = HandshakePacket::decode(&packet)
+            .expect("エンコード済みハンドシェイクパケットのデコードは成功する想定");
 
         let sid = decoded.get_sid_extension();
         assert_eq!(sid, Some(long_sid));
@@ -1021,7 +1037,8 @@ mod tests {
         hs.add_sid_extension("");
 
         let packet = hs.encode(1000, 0);
-        let decoded = HandshakePacket::decode(&packet).unwrap();
+        let decoded = HandshakePacket::decode(&packet)
+            .expect("エンコード済みハンドシェイクパケットのデコードは成功する想定");
 
         // 空文字列の場合は None になる (すべてゼロパディング)
         let sid = decoded.get_sid_extension();
@@ -1033,7 +1050,8 @@ mod tests {
         let hs = HandshakePacket::new_conclusion_request(1, 2, 3, 0, false);
 
         let packet = hs.encode(1000, 0);
-        let decoded = HandshakePacket::decode(&packet).unwrap();
+        let decoded = HandshakePacket::decode(&packet)
+            .expect("エンコード済みハンドシェイクパケットのデコードは成功する想定");
 
         let sid = decoded.get_sid_extension();
         assert!(sid.is_none());
@@ -1045,7 +1063,8 @@ mod tests {
         hs.add_congestion_extension("live");
 
         let packet = hs.encode(1000, 0);
-        let decoded = HandshakePacket::decode(&packet).unwrap();
+        let decoded = HandshakePacket::decode(&packet)
+            .expect("エンコード済みハンドシェイクパケットのデコードは成功する想定");
 
         let cc = decoded.get_congestion_extension();
         assert_eq!(cc, Some("live".to_string()));
@@ -1058,7 +1077,8 @@ mod tests {
         hs.add_congestion_extension("file");
 
         let packet = hs.encode(1000, 0);
-        let decoded = HandshakePacket::decode(&packet).unwrap();
+        let decoded = HandshakePacket::decode(&packet)
+            .expect("エンコード済みハンドシェイクパケットのデコードは成功する想定");
 
         let cc = decoded.get_congestion_extension();
         assert_eq!(cc, Some("file".to_string()));
@@ -1069,7 +1089,8 @@ mod tests {
         let hs = HandshakePacket::new_conclusion_request(1, 2, 3, 0, false);
 
         let packet = hs.encode(1000, 0);
-        let decoded = HandshakePacket::decode(&packet).unwrap();
+        let decoded = HandshakePacket::decode(&packet)
+            .expect("エンコード済みハンドシェイクパケットのデコードは成功する想定");
 
         let cc = decoded.get_congestion_extension();
         assert!(cc.is_none());
@@ -1083,7 +1104,8 @@ mod tests {
         hs.add_sid_extension("test_stream");
 
         let packet = hs.encode(1000, 0);
-        let decoded = HandshakePacket::decode(&packet).unwrap();
+        let decoded = HandshakePacket::decode(&packet)
+            .expect("エンコード済みハンドシェイクパケットのデコードは成功する想定");
 
         let cc = decoded.get_congestion_extension();
         assert_eq!(cc, Some("live".to_string()));

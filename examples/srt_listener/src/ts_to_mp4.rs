@@ -9,6 +9,7 @@ use std::path::Path;
 use mpeg2ts::es::{StreamId, StreamType};
 use mpeg2ts::pes::{PesPacketReader, ReadPesPacket};
 use mpeg2ts::ts::{Pid, ReadTsPacket, TsPacket, TsPayload};
+use tracing::{info, warn};
 
 use shiguredo_mp4::boxes::{
     AudioSampleEntryFields, Avc1Box, AvccBox, EsdsBox, Mp4aBox, SampleEntry,
@@ -33,7 +34,6 @@ pub enum ConvertError {
     Mpeg2Ts(String),
     Mp4(shiguredo_mp4::mux::MuxError),
     InvalidData(String),
-    #[allow(dead_code)]
     UnsupportedCodec(String),
 }
 
@@ -83,7 +83,7 @@ struct AvcStream {
 /// ビデオサンプル
 struct VideoSample {
     data: Vec<u8>,
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     pts: u64,
     dts: u64,
     keyframe: bool,
@@ -101,7 +101,7 @@ struct AacStream {
 /// オーディオサンプル
 struct AudioSample {
     data: Vec<u8>,
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     pts: u64,
 }
 
@@ -472,7 +472,7 @@ fn parse_ts_data(data: &[u8]) -> Result<(Option<AvcStream>, Option<AacStream>), 
     // TS パケット同期を見つける
     let sync_offset = find_ts_sync(data).unwrap_or(0);
     if sync_offset > 0 {
-        eprintln!("[MP4] Found TS sync at offset {}", sync_offset);
+        info!("found TS sync at offset {}", sync_offset);
     }
     let data = &data[sync_offset..];
 
@@ -492,7 +492,7 @@ fn parse_ts_data(data: &[u8]) -> Result<(Option<AvcStream>, Option<AacStream>), 
             Ok(None) => break,
             Err(e) => {
                 // パースエラーは警告を出して続行
-                eprintln!("[MP4] Warning: PES parse error (skipping): {}", e);
+                warn!("PES parse error (skipping): {}", e);
                 continue;
             }
         };
@@ -716,7 +716,7 @@ pub fn convert_ts_to_mp4(ts_data: &[u8], output_path: &Path) -> Result<(), Conve
 
     let video_sample_entry = SampleEntry::Avc1(Avc1Box {
         visual: VisualSampleEntryFields {
-            data_reference_index: NonZeroU16::new(1).unwrap(),
+            data_reference_index: NonZeroU16::new(1).expect("1 is always non-zero"),
             width: avc_stream.width,
             height: avc_stream.height,
             horizresolution: FixedPointNumber::new(72, 0),
@@ -773,7 +773,7 @@ pub fn convert_ts_to_mp4(ts_data: &[u8], output_path: &Path) -> Result<(), Conve
 
         Some(SampleEntry::Mp4a(Mp4aBox {
             audio: AudioSampleEntryFields {
-                data_reference_index: NonZeroU16::new(1).unwrap(),
+                data_reference_index: NonZeroU16::new(1).expect("1 is always non-zero"),
                 channelcount: channel_count,
                 samplesize: 16,
                 samplerate: FixedPointNumber::new(aac.sample_rate as u16, 0),
@@ -786,7 +786,7 @@ pub fn convert_ts_to_mp4(ts_data: &[u8], output_path: &Path) -> Result<(), Conve
     };
 
     // ビデオサンプルを書き込み
-    let video_timescale = NonZeroU32::new(TS_TIMESCALE).unwrap();
+    let video_timescale = NonZeroU32::new(TS_TIMESCALE).expect("TS_TIMESCALE is always non-zero");
     let mut is_first_video = true;
 
     for (i, sample) in avc_stream.samples.iter().enumerate() {
@@ -822,7 +822,8 @@ pub fn convert_ts_to_mp4(ts_data: &[u8], output_path: &Path) -> Result<(), Conve
 
     // オーディオサンプルを書き込み
     if let (Some(aac), Some(audio_entry)) = (&aac_stream, &audio_sample_entry) {
-        let audio_timescale = NonZeroU32::new(aac.sample_rate).unwrap();
+        let audio_timescale =
+            NonZeroU32::new(aac.sample_rate).expect("sample rate is always non-zero");
         let mut is_first_audio = true;
 
         for sample in &aac.samples {
@@ -856,8 +857,8 @@ pub fn convert_ts_to_mp4(ts_data: &[u8], output_path: &Path) -> Result<(), Conve
         file.write_all(bytes)?;
     }
 
-    eprintln!(
-        "[MP4] Saved: {} ({} video samples{})",
+    info!(
+        "saved: {} ({} video samples{})",
         output_path.display(),
         avc_stream.samples.len(),
         if has_audio {

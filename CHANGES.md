@@ -40,5 +40,21 @@
   - @voluntas
 - [CHANGE] 未使用の srt_congestion モジュール (AckInfo, BandwidthMode, CongestionControl, LiveCc) を削除する
   - @voluntas
+- [CHANGE] ByteSliceExt / VecExt トレイトを廃止し、buf モジュールの free 関数に置き換える
+  - @voluntas
 - [UPDATE] CI / Release ワークフローの Slack 通知を shiguredo/github-actions の slack-notify に移行する
+  - @voluntas
+- [UPDATE] examples のユーザー向け表示を eprintln! から tracing に移行する
+  - @voluntas
+- [UPDATE] ErrorKind から #[non_exhaustive] を除去する
+  - @voluntas
+- [UPDATE] Copy な enum のメソッドを値 (self) で受け取るよう変更する
+  - @voluntas
+- [UPDATE] デコード時に入力バイナリ由来の Vec::with_capacity を使用しないよう変更する
+  - @voluntas
+- [UPDATE] #[allow] を #[expect] に置き換え、不要になった抑制を削除する
+  - @voluntas
+- [UPDATE] .unwrap() を情報量のある .expect() に置き換える
+  - @voluntas
+- [UPDATE] tests/sansio_test.rs を tests/test_srt_connection.rs にリネームする
   - @voluntas

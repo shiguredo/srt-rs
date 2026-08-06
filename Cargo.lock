@@ -668,6 +668,7 @@ dependencies = [
  "shiguredo_mp4",
  "shiguredo_srt",
  "tokio",
+ "tracing",
  "tracing-subscriber",
 ]
 
@@ -681,6 +682,7 @@ dependencies = [
  "shiguredo_mp4",
  "shiguredo_srt",
  "tokio",
+ "tracing",
  "tracing-subscriber",
 ]
 

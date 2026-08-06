@@ -29,9 +29,9 @@ pub enum KeyLength {
 
 impl KeyLength {
     /// バイト長を取得
-    #[allow(clippy::len_without_is_empty)]
-    pub fn len(&self) -> usize {
-        *self as usize
+    #[expect(clippy::len_without_is_empty)]
+    pub fn len(self) -> usize {
+        self as usize
     }
 
     /// バイト長から KeyLength を取得
@@ -53,7 +53,7 @@ impl KeyLength {
     }
 
     /// ハンドシェイクの Encryption Field 値へ変換
-    pub fn to_encryption_field(&self) -> u16 {
+    pub fn to_encryption_field(self) -> u16 {
         match self {
             Self::Aes128 => 2,
             Self::Aes256 => 4,
@@ -82,12 +82,12 @@ impl KeyFlag {
     }
 
     /// KK フィールド値へ変換
-    pub fn to_kk_field(&self) -> u8 {
-        *self as u8
+    pub fn to_kk_field(self) -> u8 {
+        self as u8
     }
 
     /// 反対の鍵フラグを取得
-    pub fn other(&self) -> Self {
+    pub fn other(self) -> Self {
         match self {
             Self::Even => Self::Odd,
             Self::Odd => Self::Even,
@@ -464,8 +464,10 @@ mod tests {
             0xEE, 0xFF,
         ];
 
-        let wrapped = wrap_sek(&kek, &sek, KeyLength::Aes128).unwrap();
-        let unwrapped = unwrap_sek(&kek, &wrapped, KeyLength::Aes128).unwrap();
+        let wrapped = wrap_sek(&kek, &sek, KeyLength::Aes128)
+            .expect("SEK のラップは有効な入力では成功する想定");
+        let unwrapped = unwrap_sek(&kek, &wrapped, KeyLength::Aes128)
+            .expect("ラップ済み SEK のアンラップは成功する想定");
 
         assert_eq!(sek, unwrapped);
     }
@@ -481,13 +483,15 @@ mod tests {
         let original = b"Hello, SRT!".to_vec();
 
         let mut encrypted = original.clone();
-        encrypt_payload(&sek, &salt, packet_index, &mut encrypted, KeyLength::Aes128).unwrap();
+        encrypt_payload(&sek, &salt, packet_index, &mut encrypted, KeyLength::Aes128)
+            .expect("暗号化は有効な入力では成功する想定");
 
         // 暗号化されていることを確認
         assert_ne!(original, encrypted);
 
         // 復号化
-        encrypt_payload(&sek, &salt, packet_index, &mut encrypted, KeyLength::Aes128).unwrap();
+        encrypt_payload(&sek, &salt, packet_index, &mut encrypted, KeyLength::Aes128)
+            .expect("復号化は有効な入力では成功する想定");
 
         // 元に戻っていることを確認
         assert_eq!(original, encrypted);
@@ -497,8 +501,8 @@ mod tests {
     fn test_km_refresh_state_transitions() {
         let salt = [0u8; 16];
         let sek = vec![0x42u8; 16];
-        let mut crypto =
-            CryptoContext::new_sender("passphrase", KeyLength::Aes128, salt, &sek).unwrap();
+        let mut crypto = CryptoContext::new_sender("passphrase", KeyLength::Aes128, salt, &sek)
+            .expect("Sender コンテキストの生成は成功する想定");
 
         // 初期状態
         assert_eq!(crypto.km_refresh_state(), KmRefreshState::Idle);
@@ -506,7 +510,9 @@ mod tests {
 
         // 事前通知開始
         let new_sek = vec![0x43u8; 16];
-        let (new_key, wrapped) = crypto.start_pre_announce(&new_sek).unwrap();
+        let (new_key, wrapped) = crypto
+            .start_pre_announce(&new_sek)
+            .expect("事前通知は正常な鍵で成功する想定");
         assert_eq!(new_key, KeyFlag::Odd);
         assert!(!wrapped.is_empty());
         assert_eq!(crypto.km_refresh_state(), KmRefreshState::PreAnnounce);
@@ -525,8 +531,8 @@ mod tests {
     fn test_km_refresh_should_pre_announce() {
         let salt = [0u8; 16];
         let sek = vec![0x42u8; 16];
-        let mut crypto =
-            CryptoContext::new_sender("passphrase", KeyLength::Aes128, salt, &sek).unwrap();
+        let mut crypto = CryptoContext::new_sender("passphrase", KeyLength::Aes128, salt, &sek)
+            .expect("Sender コンテキストの生成は成功する想定");
 
         // 初期状態では事前通知不要
         assert!(!crypto.should_pre_announce());
@@ -556,21 +562,27 @@ mod tests {
     fn test_km_refresh_encrypt_with_key_switch() {
         let salt = [0u8; 16];
         let sek = vec![0x42u8; 16];
-        let mut crypto =
-            CryptoContext::new_sender("passphrase", KeyLength::Aes128, salt, &sek).unwrap();
+        let mut crypto = CryptoContext::new_sender("passphrase", KeyLength::Aes128, salt, &sek)
+            .expect("Sender コンテキストの生成は成功する想定");
         let mut payload1 = b"test data 1".to_vec();
         let mut payload2 = b"test data 2".to_vec();
 
         // 偶数キーで暗号化
-        let key1 = crypto.encrypt(1, &mut payload1).unwrap();
+        let key1 = crypto
+            .encrypt(1, &mut payload1)
+            .expect("暗号化は成功する想定");
         assert_eq!(key1, KeyFlag::Even);
 
         // 事前通知開始
         let new_sek = vec![0x43u8; 16];
-        let _ = crypto.start_pre_announce(&new_sek).unwrap();
+        let _ = crypto
+            .start_pre_announce(&new_sek)
+            .expect("事前通知は正常な鍵で成功する想定");
 
         // まだ偶数キーで暗号化
-        let key2 = crypto.encrypt(2, &mut payload2).unwrap();
+        let key2 = crypto
+            .encrypt(2, &mut payload2)
+            .expect("暗号化は成功する想定");
         assert_eq!(key2, KeyFlag::Even);
 
         // 鍵切り替え
@@ -578,7 +590,9 @@ mod tests {
 
         // 奇数キーで暗号化
         let mut payload3 = b"test data 3".to_vec();
-        let key3 = crypto.encrypt(3, &mut payload3).unwrap();
+        let key3 = crypto
+            .encrypt(3, &mut payload3)
+            .expect("暗号化は成功する想定");
         assert_eq!(key3, KeyFlag::Odd);
     }
 

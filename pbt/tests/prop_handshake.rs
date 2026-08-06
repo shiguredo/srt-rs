@@ -131,7 +131,8 @@ fn arb_km_message() -> impl Strategy<Value = KmMessage> {
 
 /// Stream ID 文字列の生成
 fn arb_stream_id() -> impl Strategy<Value = String> {
-    prop::string::string_regex("[a-zA-Z0-9_#!:=/,.-]{0,100}").unwrap()
+    prop::string::string_regex("[a-zA-Z0-9_#!:=/,.-]{0,100}")
+        .expect("ストリーム ID 用の正規表現は有効な想定")
 }
 
 /// Congestion control 名の生成
@@ -759,7 +760,7 @@ proptest! {
         // デコードは成功するが、未知の拡張は無視される
         let result = HandshakePacket::decode(&packet);
         prop_assert!(result.is_ok());
-        let decoded = result.unwrap();
+        let decoded = result.expect("既知の拡張のみを含むパケットのデコードは成功する想定");
         prop_assert!(decoded.extensions.is_empty());
     }
 
@@ -809,7 +810,12 @@ proptest! {
         prop_assert!(packet.get_hs_extension().is_none());
         prop_assert!(packet.get_km_request().is_none());
         prop_assert!(packet.get_km_response().is_ok());
-        prop_assert!(packet.get_km_response().unwrap().is_none());
+        prop_assert!(
+            packet
+                .get_km_response()
+                .expect("KM レスポンスの取得は成功する想定")
+                .is_none()
+        );
         prop_assert!(packet.get_sid_extension().is_none());
         prop_assert!(packet.get_congestion_extension().is_none());
     }

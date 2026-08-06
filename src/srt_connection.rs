@@ -5,7 +5,7 @@
 
 use std::collections::VecDeque;
 
-use crate::buf::VecExt;
+use crate::buf::write_u32;
 use crate::crypto::{CryptoContext, KeyFlag, KeyLength};
 use crate::error::Error;
 use crate::srt_handshake::{
@@ -886,7 +886,7 @@ impl SrtConnection {
         }
 
         let mut buf = pkt.control_info.as_slice();
-        let ack_seq = crate::buf::ByteSliceExt::read_u32(&mut buf)?;
+        let ack_seq = crate::buf::read_u32(&mut buf)?;
 
         tracing::debug!(
             "received ACK, ack_seq={}, type_specific_info={}, control_info_len={}",
@@ -1095,16 +1095,16 @@ impl SrtConnection {
         self.last_ack_time = Some(now);
 
         let mut control_info = Vec::new();
-        control_info.write_u32(ack_info.ack_seq);
+        write_u32(&mut control_info, ack_info.ack_seq);
 
         if !ack_info.is_light {
             // Full ACK (SRT 仕様に準拠)
-            control_info.write_u32(ack_info.rtt);
-            control_info.write_u32(ack_info.rtt_var);
-            control_info.write_u32(ack_info.available_buffer);
-            control_info.write_u32(ack_info.receiving_rate); // packets/sec
-            control_info.write_u32(ack_info.link_capacity); // packets/sec
-            control_info.write_u32(ack_info.recv_rate); // bytes/sec
+            write_u32(&mut control_info, ack_info.rtt);
+            write_u32(&mut control_info, ack_info.rtt_var);
+            write_u32(&mut control_info, ack_info.available_buffer);
+            write_u32(&mut control_info, ack_info.receiving_rate); // packets/sec
+            write_u32(&mut control_info, ack_info.link_capacity); // packets/sec
+            write_u32(&mut control_info, ack_info.recv_rate); // bytes/sec
         }
 
         let pkt = ControlPacket {
@@ -1365,7 +1365,7 @@ fn parse_loss_list(data: &[u8]) -> Vec<u32> {
     let mut slice = data;
 
     while slice.len() >= 4 {
-        let word = match crate::buf::ByteSliceExt::read_u32(&mut slice) {
+        let word = match crate::buf::read_u32(&mut slice) {
             Ok(w) => w,
             Err(_) => break,
         };
@@ -1374,7 +1374,7 @@ fn parse_loss_list(data: &[u8]) -> Vec<u32> {
             // Range: [word & 0x7FFF_FFFF, next_word]
             if slice.len() >= 4 {
                 let start = word & 0x7FFF_FFFF;
-                let end = match crate::buf::ByteSliceExt::read_u32(&mut slice) {
+                let end = match crate::buf::read_u32(&mut slice) {
                     Ok(w) => w & 0x7FFF_FFFF,
                     Err(_) => break,
                 };
@@ -1427,12 +1427,12 @@ fn encode_loss_list(loss_list: &[u32]) -> Vec<u8> {
 
         if start == end {
             // 単一のシーケンス番号
-            result.write_u32(start & 0x7FFF_FFFF);
+            write_u32(&mut result, start & 0x7FFF_FFFF);
         } else {
             // 範囲: 2つ以上連続する場合は範囲エンコード
             // 最初の word は MSB を 1 に設定
-            result.write_u32((start & 0x7FFF_FFFF) | 0x8000_0000);
-            result.write_u32(end & 0x7FFF_FFFF);
+            write_u32(&mut result, (start & 0x7FFF_FFFF) | 0x8000_0000);
+            write_u32(&mut result, end & 0x7FFF_FFFF);
         }
 
         i += 1;

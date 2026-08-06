@@ -47,7 +47,7 @@ pub enum StreamType {
 
 impl StreamType {
     /// 文字列から変換
-    #[allow(clippy::should_implement_trait)]
+    #[expect(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "stream" => Some(Self::Stream),
@@ -58,7 +58,7 @@ impl StreamType {
     }
 
     /// 文字列に変換
-    pub fn as_str(&self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Stream => "stream",
             Self::File => "file",
@@ -81,7 +81,7 @@ pub enum StreamMode {
 
 impl StreamMode {
     /// 文字列から変換
-    #[allow(clippy::should_implement_trait)]
+    #[expect(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "request" => Some(Self::Request),
@@ -92,7 +92,7 @@ impl StreamMode {
     }
 
     /// 文字列に変換
-    pub fn as_str(&self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Request => "request",
             Self::Publish => "publish",
@@ -298,7 +298,8 @@ mod tests {
 
     #[test]
     fn test_parse_basic() {
-        let ac = AccessControl::parse("#!::u=admin,r=bluesbrothers1_hi").unwrap();
+        let ac = AccessControl::parse("#!::u=admin,r=bluesbrothers1_hi")
+            .expect("有効なストリーム ID のパースは成功する想定");
         assert_eq!(ac.user_name(), Some("admin"));
         assert_eq!(ac.resource_name(), Some("bluesbrothers1_hi"));
         assert_eq!(ac.stream_type(), StreamType::Stream);
@@ -307,7 +308,8 @@ mod tests {
 
     #[test]
     fn test_parse_with_type_and_mode() {
-        let ac = AccessControl::parse("#!::u=johnny,t=file,m=publish,r=results.csv").unwrap();
+        let ac = AccessControl::parse("#!::u=johnny,t=file,m=publish,r=results.csv")
+            .expect("有効なストリーム ID のパースは成功する想定");
         assert_eq!(ac.user_name(), Some("johnny"));
         assert_eq!(ac.resource_name(), Some("results.csv"));
         assert_eq!(ac.stream_type(), StreamType::File);
@@ -316,21 +318,24 @@ mod tests {
 
     #[test]
     fn test_parse_with_host() {
-        let ac = AccessControl::parse("#!::h=example.com,r=live/stream1").unwrap();
+        let ac = AccessControl::parse("#!::h=example.com,r=live/stream1")
+            .expect("有効なストリーム ID のパースは成功する想定");
         assert_eq!(ac.host_name(), Some("example.com"));
         assert_eq!(ac.resource_name(), Some("live/stream1"));
     }
 
     #[test]
     fn test_parse_with_session() {
-        let ac = AccessControl::parse("#!::s=abc123,r=temp").unwrap();
+        let ac = AccessControl::parse("#!::s=abc123,r=temp")
+            .expect("有効なストリーム ID のパースは成功する想定");
         assert_eq!(ac.session_id(), Some("abc123"));
         assert_eq!(ac.resource_name(), Some("temp"));
     }
 
     #[test]
     fn test_parse_with_custom() {
-        let ac = AccessControl::parse("#!::u=test,myapp_key=value123").unwrap();
+        let ac = AccessControl::parse("#!::u=test,myapp_key=value123")
+            .expect("有効なストリーム ID のパースは成功する想定");
         assert_eq!(ac.user_name(), Some("test"));
         assert_eq!(ac.custom("myapp_key"), Some("value123"));
     }
@@ -379,7 +384,8 @@ mod tests {
             .build();
 
         let encoded = original.encode();
-        let parsed = AccessControl::parse(&encoded).unwrap();
+        let parsed = AccessControl::parse(&encoded)
+            .expect("エンコード済みストリーム ID のパースは成功する想定");
 
         assert_eq!(parsed.user_name(), original.user_name());
         assert_eq!(parsed.resource_name(), original.resource_name());

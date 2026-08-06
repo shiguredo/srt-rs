@@ -20,5 +20,7 @@ tokio = {
     "time",
   ]
 }
+# ログ出力 (ユーザー向け表示を eprintln から移行する)
+tracing = "0.1"
 # ライブラリの tracing ログ出力先を設定する (--debug で level を debug に上げる)
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

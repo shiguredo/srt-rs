@@ -3,7 +3,6 @@ use std::panic::Location;
 
 /// エンコード/デコード操作のエラーの種類
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[non_exhaustive]
 pub enum ErrorKind {
     /// データコンテンツが無効または破損している
     InvalidData,
