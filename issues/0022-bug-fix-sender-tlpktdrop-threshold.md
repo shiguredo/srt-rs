@@ -2,9 +2,17 @@
 
 - Priority: Medium
 - Created: 2026-05-14
+- Completed: 2026-08-15
 - Model: DeepSeek V4 Pro
 - Branch: feature/fix-sender-tlpktdrop-threshold
 - Polished: 2026-08-15
+
+## 解決方法
+
+- `drop_expired()` の閾値を `self.latency_us` から `max(latency_us * 125 / 100, 1_000_000)` に変更した
+- PBT テスト (`test_sender_buffer_drop_expired`) の生成範囲を `10u16..1000u16` に拡張し、`before_expire`/`after_expire` の計算を新閾値ベースに更新した
+- 1 秒下限・1.25 倍側・境界値 (`latency_ms = 800`) の単体テストを `src/srt_sender.rs` の `#[cfg(test)]` モジュールに追加した
+- `CHANGES.md` の `## develop` セクションに `[FIX]` エントリを追加した
 
 ## 目的
 
