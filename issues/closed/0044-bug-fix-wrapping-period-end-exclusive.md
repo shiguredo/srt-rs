@@ -2,6 +2,7 @@
 
 - Priority: Low
 - Created: 2026-05-14
+- Completed: 2026-08-15
 - Model: DeepSeek V4 Pro
 - Branch: feature/fix-wrapping-period-end-exclusive
 - Polished: 2026-08-15
@@ -43,3 +44,10 @@
 - 定数コメントが更新されていること
 - `cargo test` で全テストが通過すること
 - CHANGES.md に `[FIX]` エントリが追加されていること
+
+## 解決方法
+
+- `pop_ready()` 内の終了条件を `(WRAPPING_PERIOD_END_MIN..WRAPPING_PERIOD_END_MAX)` (上限のみ開区間) に変更した
+- 下限 (`WRAPPING_PERIOD_END_MIN`) は変更していない
+- 定数コメントを実際の終了条件に合わせて更新した
+- `CHANGES.md` の `## develop` セクションに `[FIX]` エントリを追加した
