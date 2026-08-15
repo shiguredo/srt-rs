@@ -31,6 +31,8 @@
   - @voluntas
 - [FIX] TSBPD wrapping period の終了判定を受信時ではなくパケット配信時に行うよう修正し、ラップ境界の配信時刻計算を整合させる
   - @voluntas
+- [FIX] drop_expired の TLPKTDROP 閾値を仕様の推奨値 (max(1.25 * latency, 1 秒)) に合わせる
+  - @voluntas
 - [FIX] Listener が CONCLUSION 受信時に Caller の Initial Packet Sequence Number を採用するよう修正する
   - @voluntas
 
