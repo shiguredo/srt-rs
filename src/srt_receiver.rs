@@ -431,24 +431,29 @@ impl ReceiverBuffer {
         }
         self.last_transit = Some(transit);
 
-        // TSBPD ラップアラウンド期間のチェック
+        // TSBPD ラップアラウンド期間の開始判定
+        // 終了判定は pop_ready() に移動 (仕様: "is delivered (read from the buffer)")
         if self.tsbpd_enabled {
             let ts = packet.timestamp as u64;
             if ts >= WRAPPING_PERIOD_START && !self.wrapping_period_active {
                 self.wrapping_period_active = true;
             }
-            if self.wrapping_period_active
-                && (WRAPPING_PERIOD_END_MIN..=WRAPPING_PERIOD_END_MAX).contains(&ts)
-            {
-                self.tsbpd_time_base += MAX_TIMESTAMP + 1;
-                self.wrapping_period_active = false;
-            }
         }
 
         // TSBPD 配信時刻を計算
         let delivery_time = if self.tsbpd_enabled {
-            // パケットタイムスタンプ + TSBPD 遅延
-            let pkt_time = self.tsbpd_time_base + packet.timestamp as u64;
+            // ラップ後パケット (wrapping_period_active かつ ts < WRAPPING_PERIOD_START) の
+            // 配信時刻は MAX_TIMESTAMP + 1 を加算して補正する。
+            // ラップ前パケットの ts は WRAPPING_PERIOD_START 以上であり衝突しない。
+            let pkt_time = self.tsbpd_time_base
+                + packet.timestamp as u64
+                + if self.wrapping_period_active
+                    && (packet.timestamp as u64) < WRAPPING_PERIOD_START
+                {
+                    MAX_TIMESTAMP + 1
+                } else {
+                    0
+                };
             Timestamp::from_micros(pkt_time + self.tsbpd_delay_us)
         } else {
             now
@@ -499,7 +504,20 @@ impl ReceiverBuffer {
         // 配信可能なシーケンス番号を探す
         let delivery_seq = self.find_deliverable_seq(now)?;
 
-        self.packets.remove(&delivery_seq).map(|e| e.packet)
+        let entry = self.packets.remove(&delivery_seq)?;
+
+        // TSBPD ラップアラウンド期間の終了判定
+        // 仕様 (draft-sharabayko-srt.md の #tsbpd-time-base 節):
+        // "ends once the packet with timestamp within (30, 60) seconds interval is delivered"
+        if self.tsbpd_enabled && self.wrapping_period_active {
+            let ts = entry.packet.timestamp as u64;
+            if (WRAPPING_PERIOD_END_MIN..=WRAPPING_PERIOD_END_MAX).contains(&ts) {
+                self.tsbpd_time_base += MAX_TIMESTAMP + 1;
+                self.wrapping_period_active = false;
+            }
+        }
+
+        Some(entry.packet)
     }
 
     /// 配信可能なシーケンス番号を検索
@@ -638,7 +656,17 @@ impl ReceiverBuffer {
                     .packets
                     .get(&seq)
                     .map(|p| p.delivery_time.as_micros())
-                    .unwrap_or_else(|| self.tsbpd_time_base + self.tsbpd_delay_us);
+                    .unwrap_or_else(|| {
+                        // wrapping_period_active が有効中はラップ後の損失パケットの
+                        // 推定配信時刻に MAX_TIMESTAMP + 1 を加算する。
+                        // ラップ前損失パケットは最大約 30 秒の過大推定 (ドロップが遅れる安全側) になる。
+                        let base = self.tsbpd_time_base + self.tsbpd_delay_us;
+                        if self.wrapping_period_active {
+                            base + MAX_TIMESTAMP + 1
+                        } else {
+                            base
+                        }
+                    });
                 now.as_micros() > estimated_delivery + tlpktdrop_threshold
             })
             .collect();
@@ -1298,5 +1326,163 @@ mod tests {
             popped.push(pkt.sequence_number);
         }
         assert_eq!(popped, vec![0x7FFF_FFFF, 0, 1]);
+    }
+
+    #[test]
+    fn test_wrapping_period_delivery_time_compensation() {
+        // ラップ後パケットの配信時刻に MAX_TIMESTAMP + 1 が加算されることを検証する。
+        let start = Timestamp::from_micros(0);
+        let tsbpd_time_base = 500_000;
+        let mut buf = ReceiverBuffer::new(1000, 120, start, tsbpd_time_base);
+
+        // ラップ前窗口のパケットを受信して wrapping_period_active を有効化する。
+        // WRAPPING_PERIOD_START = MAX_TIMESTAMP - 30_000_000
+        let wrap_start_ts = WRAPPING_PERIOD_START as u32;
+        let now = Timestamp::from_micros(1_000_000);
+        buf.receive(make_packet(1000, wrap_start_ts), now);
+        assert!(buf.wrapping_period_active);
+
+        // ラップ後パケット (ts = 10_000_000 < WRAPPING_PERIOD_START) の配信時刻は
+        // tsbpd_time_base + ts + MAX_TIMESTAMP + 1 + tsbpd_delay_us になる。
+        let post_wrap_ts: u32 = 10_000_000;
+        buf.receive(make_packet(1001, post_wrap_ts), now);
+
+        // 配信時刻が正しく補正されていることを確認する。
+        // 補正あり: delivery_time = 500_000 + 10_000_000 + (MAX_TIMESTAMP + 1) + 120_000
+        //          = 500_000 + 10_000_000 + 4_294_967_296 + 120_000
+        //          = 4_305_587_296 μs
+        // 補正なし: delivery_time = 500_000 + 10_000_000 + 120_000 = 10_620_000 μs
+        // 補正なしの時刻では即時配信されるが、補正ありの時刻では配信されないことを確認する。
+        let early = Timestamp::from_micros(10_620_000);
+        assert!(
+            buf.pop_ready(early).is_none(),
+            "補正後の配信時刻は未来のはず"
+        );
+
+        // 補正後の配信時刻を超えると配信される。
+        // 1000 (ラップ前) と 1001 (ラップ後、補正あり) の両方が配信される。
+        let late = Timestamp::from_micros(4_305_588_000);
+        let pkt0 = buf.pop_ready(late);
+        assert!(pkt0.is_some(), "ラップ前パケットが配信されるはず");
+        assert_eq!(pkt0.expect("配信パケット").sequence_number, 1000);
+
+        let pkt1 = buf.pop_ready(late);
+        assert!(pkt1.is_some(), "ラップ後パケットが配信されるはず");
+        assert_eq!(pkt1.expect("配信パケット").sequence_number, 1001);
+    }
+
+    #[test]
+    fn test_wrapping_period_drop_too_late_fallback() {
+        // wrapping_period_active が有効な場合、drop_too_late のフォールバック式に
+        // MAX_TIMESTAMP + 1 が加算されることを検証する。
+        let start = Timestamp::from_micros(0);
+        let tsbpd_time_base = 500_000;
+        let mut buf = ReceiverBuffer::new(1000, 120, start, tsbpd_time_base);
+
+        // ラップ前窗口のパケットを受信して wrapping_period_active を有効化する。
+        let wrap_start_ts = WRAPPING_PERIOD_START as u32;
+        let now = Timestamp::from_micros(1_000_000);
+        buf.receive(make_packet(1000, wrap_start_ts), now);
+
+        // 1002 を受信して 1001 を損失として登録する。
+        buf.receive(make_packet(1002, 200_000), now);
+        assert!(buf.loss_list.contains(&1001));
+
+        // wrapping_period_active が有効なので、フォールバック式は
+        // tsbpd_time_base + tsbpd_delay_us + MAX_TIMESTAMP + 1
+        // = 500_000 + 120_000 + 4_294_967_296
+        // = 4_295_587_296 μs
+        // TLPKTDROP = max(1.25 * 120_000, 1_000_000) = 1_000_000
+        // now = 4_295_587_296 + 1_000_000 = 4_296_587_296 で削除される。
+        // それより前の時刻では削除されない。
+        let before = Timestamp::from_micros(4_295_587_000);
+        let dropped = buf.drop_too_late(before);
+        assert!(dropped.is_empty(), "閾値未満では削除されないはず");
+
+        let after = Timestamp::from_micros(4_296_588_000);
+        let dropped = buf.drop_too_late(after);
+        assert_eq!(dropped, vec![1001], "閾値超過で削除されるはず");
+    }
+
+    #[test]
+    fn test_wrapping_period_end_in_pop_ready() {
+        // pop_ready() 内で終了窗口パケット (ts が 30〜60 秒の範囲) が配信されたときに
+        // wrapping_period_active が false になり tsbpd_time_base が更新されることを検証する。
+        let start = Timestamp::from_micros(0);
+        let tsbpd_time_base = 0;
+        let mut buf = ReceiverBuffer::new(1000, 120, start, tsbpd_time_base);
+
+        // ラップ前窗口のパケットを受信して wrapping_period_active を有効化する。
+        let wrap_start_ts = WRAPPING_PERIOD_START as u32;
+        let now = Timestamp::from_micros(1_000_000);
+        buf.receive(make_packet(1000, wrap_start_ts), now);
+        assert!(buf.wrapping_period_active);
+
+        // 終了窗口パケット (ts = 40_000_000, 40 秒) を受信する。
+        // これは (WRAPPING_PERIOD_END_MIN..=WRAPPING_PERIOD_END_MAX) の範囲内。
+        // ラップ後パケットのため配信時刻に MAX_TIMESTAMP + 1 が加算される。
+        let end_ts: u32 = 40_000_000;
+        buf.receive(make_packet(1001, end_ts), now);
+
+        // 両パケットの配信時刻:
+        // 1000: delivery_time = 0 + WRAPPING_PERIOD_START + 120_000 = 4_265_087_295
+        // 1001: delivery_time = 0 + 40_000_000 + MAX_TIMESTAMP + 1 + 120_000 = 4_335_087_296
+        // 両パケットの配信時刻を超える時刻で配信する。
+        // 1000 が配信された後、1001 が配信されると pop_ready() 内で終了判定が発火する。
+        let late = Timestamp::from_micros(4_335_088_000);
+        let pkt0 = buf.pop_ready(late);
+        assert!(pkt0.is_some(), "1000 が配信されるはず");
+        assert_eq!(pkt0.expect("配信パケット").sequence_number, 1000);
+
+        // 1001 を配信する。終了判定が発火し wrapping_period_active が false になる。
+        // tsbpd_time_base は private フィールドのため直接検証できないが、
+        // 終了判定のコード (self.tsbpd_time_base += MAX_TIMESTAMP + 1) と
+        // wrapping_period_active の変化で間接的に検証する。
+        let pkt1 = buf.pop_ready(late);
+        assert!(pkt1.is_some(), "1001 が配信されるはず");
+        assert_eq!(pkt1.expect("配信パケット").sequence_number, 1001);
+        assert!(
+            !buf.wrapping_period_active,
+            "終了判定が発火し wrapping_period_active が false になるはず"
+        );
+    }
+
+    #[test]
+    fn test_wrapping_period_no_end_in_pop_ready_when_tsbpd_disabled() {
+        // TSBPD 無効時は pop_ready() 内の終了判定が発火しないことを検証する。
+        // TSBPD 無効時は delivery_time = now なので、終了窗口パケット (ts が 30〜60 秒) も
+        // 即時配信可能になる。その配信時に終了判定が発火しないことを確認する。
+        let start = Timestamp::from_micros(0);
+        let tsbpd_time_base = 500_000;
+        let mut buf = ReceiverBuffer::new(1000, 120, start, tsbpd_time_base);
+
+        // ラップ前窗口のパケットを受信して wrapping_period_active を有効化する。
+        let wrap_start_ts = WRAPPING_PERIOD_START as u32;
+        let now = Timestamp::from_micros(1_000_000);
+        buf.receive(make_packet(1000, wrap_start_ts), now);
+        assert!(buf.wrapping_period_active);
+
+        // 終了窗口パケット (ts = 40_000_000) を受信する。
+        let end_ts: u32 = 40_000_000;
+        buf.receive(make_packet(1001, end_ts), now);
+
+        // TSBPD を無効化する。これにより delivery_time = now となり即時配信可能になる。
+        buf.set_tsbpd_enabled(false);
+
+        // 1000 を配信する。終了判定は発火しない。
+        let pkt0 = buf.pop_ready(now);
+        assert!(pkt0.is_some(), "1000 が配信されるはず");
+        assert!(
+            buf.wrapping_period_active,
+            "TSBPD 無効時は終了判定が発火しないはず"
+        );
+
+        // 1001 (終了窗口パケット) を配信する。TSBPD 無効時は終了判定が発火しない。
+        let pkt1 = buf.pop_ready(now);
+        assert!(pkt1.is_some(), "1001 が配信されるはず");
+        assert!(
+            buf.wrapping_period_active,
+            "TSBPD 無効時は終了窗口パケットでも終了判定が発火しないはず"
+        );
     }
 }
