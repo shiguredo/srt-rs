@@ -4,7 +4,7 @@
 - Created: 2026-05-14
 - Model: DeepSeek V4 Pro
 - Branch: feature/fix-sender-tlpktdrop-threshold
-- Polished: 2026-07-31
+- Polished: 2026-08-15
 
 ## 目的
 
@@ -16,7 +16,7 @@
 
 ## 現状
 
-`drop_expired()` は送信時刻からの経過時間が `self.latency_us` を超えたパケットを期限切れとして破棄する:
+`drop_expired()` は送信時刻からの経過時間が `self.latency_us` を超えたパケットを期限切れとして破棄する (`srt_connection.rs` の `handle_timer` 内の ACK タイマーから 10ms 周期で呼び出される):
 
 ```rust
 .filter_map(|(&seq, entry)| {
@@ -43,13 +43,14 @@ draft-sharabayko-srt.md の `#too-late-packet-drop` 節:
 
 ## 設計方針
 
-- `self.latency_us` の代わりに `max(latency_us * 125 / 100, 1_000_000)` (µs 単位、受信側の `tlpktdrop_threshold` 計算と同じ `* 125 / 100` と `max` の整数演算) を閾値として使用する。`latency_us` は u16 の ms 値に 1000 を掛けた値であり、この演算でオーバーフローしない
-- 判定基準時刻は変更しない (現状の `sent_time` 基準のまま。再送時に `sent_time` を更新する既存挙動も維持する)。仕様の「packet timestamp 基準」への変更は本 issue のスコープ外とする
+- `self.latency_us` の代わりに `max(latency_us * 125 / 100, 1_000_000)` (µs 単位、受信側の `tlpktdrop_threshold` 計算と同じ `* 125 / 100` と `max` の整数演算。`latency_us` は u16 の ms 値に 1000 を掛けた値であり、`latency_us * 125` は最大 `65_535_000 * 125 = 8_191_875_000` で `u64` に収まるため `as u128` キャストは不要。`latency_us` は構築後不変のため、`drop_expired()` 呼び出しのたびに計算するか事前計算するかは実装者の判断に委ねる) を閾値として使用する
+- 判定基準時刻は変更しない (現状の `sent_time` 基準のまま。再送時に `sent_time` を更新する既存挙動も維持する)。仕様の「packet timestamp 基準」への変更は本 issue のスコープ外とする。本ライブラリでは再送時に `sent_time` が更新されるため、`sent_time` 基準でも実質的な再送猶予は確保されており、短い閾値による早期破棄の方が問題として大きいため優先度は閾値修正に置く
 
 ## 完了条件
 
 - `drop_expired()` の閾値が `max(latency_us * 125 / 100, 1_000_000)` になっていること
-- 既存の `test_sender_buffer_drop_expired` (pbt/tests/prop_sender.rs) が新閾値に合わせて更新されていること (現状の生成範囲 `latency_ms in 10u16..100u16` では常に 1 秒下限が支配的になるため、1.25 倍側の境界を検証するには 800ms 超の生成範囲も必要になる)
-- 閾値の境界 (1.25 倍側と 1 秒下限の切り替わり) と drop 判定の排他性 (`elapsed > threshold` の不等号) を検証するテストが追加されていること
+- 既存の `test_sender_buffer_drop_expired` (pbt/tests/prop_sender.rs) が新閾値に合わせて更新されていること。`latency_ms` の生成範囲を `10u16..1000u16` に拡張し、`before_expire` と `after_expire` の時刻計算を `max(latency_us * 125 / 100, 1_000_000) - 1000` と `max(latency_us * 125 / 100, 1_000_000) + 1000` に変更すること (テスト側では `latency_us` は private フィールドのため `latency_ms as u64 * 1000` に展開して使用する)
+- 閾値の境界 (`latency_ms = 800` で 1 秒下限と 1.25 倍側が切り替わる) を検証するテストが `src/srt_sender.rs` の `#[cfg(test)]` モジュールに追加されていること。`latency_ms = 800` で `elapsed = 1_000_000` のとき drop されない (等号)、`elapsed = 1_000_001` のとき drop されることを確認する
+- drop 判定の排他性 (`elapsed > threshold` の不等号) を検証するテストが `src/srt_sender.rs` の `#[cfg(test)]` モジュールに追加されていること。`latency_ms = 1000` で `elapsed = 1_250_000` のとき drop されない (等号)、`elapsed = 1_250_001` のとき drop されることを確認する
 - `cargo test` で全テストが通過すること
-- CHANGES.md の `## develop` セクションに `[FIX]` エントリが追加されていること
+- CHANGES.md の `## develop` セクションに `[FIX]` エントリ (`[FIX] drop_expired の TLPKTDROP 閾値を仕様の推奨値 (max(1.25 * latency, 1 秒)) に合わせる`。担当者行を付けて追加すること) を追加すること
