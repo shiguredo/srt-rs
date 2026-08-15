@@ -33,6 +33,8 @@
   - @voluntas
 - [FIX] drop_expired の TLPKTDROP 閾値を仕様の推奨値 (max(1.25 * latency, 1 秒)) に合わせる
   - @voluntas
+- [FIX] drop_too_late の未受信パケット推定配送時刻を次側パケットの delivery_time に基づくよう修正する
+  - @voluntas
 - [FIX] Listener が CONCLUSION 受信時に Caller の Initial Packet Sequence Number を採用するよう修正する
   - @voluntas
 

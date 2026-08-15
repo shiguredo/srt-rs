@@ -647,6 +647,10 @@ impl ReceiverBuffer {
 
         let mut dropped = Vec::new();
 
+        // 欠損パケットの推定配信時刻を計算する。
+        // 各欠損 seq に対して、循環順で次側の受信パケットの delivery_time を推定値として使用する。
+        // 次側の delivery_time は欠損パケットの真の配信時刻以上であるため、この推定は過大評価側になる。
+        // 次側の受信パケットが存在しない場合は、防御的にフォールバック値を使用する。
         let expired: Vec<u32> = self
             .loss_list
             .iter()
@@ -657,14 +661,25 @@ impl ReceiverBuffer {
                     .get(&seq)
                     .map(|p| p.delivery_time.as_micros())
                     .unwrap_or_else(|| {
-                        // wrapping_period_active が有効中はラップ後の損失パケットの
-                        // 推定配信時刻に MAX_TIMESTAMP + 1 を加算する。
-                        // ラップ前損失パケットは最大約 30 秒の過大推定 (ドロップが遅れる安全側) になる。
-                        let base = self.tsbpd_time_base + self.tsbpd_delay_us;
-                        if self.wrapping_period_active {
-                            base + MAX_TIMESTAMP + 1
-                        } else {
-                            base
+                        // 循環順で seq より大きい最小の受信パケットを探す。
+                        // BTreeMap の数値順で seq より大きい最初の要素を取得し、なければ最小の要素を取る。
+                        let next_seq = self
+                            .packets
+                            .range(seq.wrapping_add(1)..)
+                            .next()
+                            .or_else(|| self.packets.iter().next());
+                        match next_seq {
+                            Some((_, entry)) => entry.delivery_time.as_micros(),
+                            // 次側の受信パケットが存在しない場合のフォールバック。
+                            // wrapping_period_active が有効中は MAX_TIMESTAMP + 1 を加算する (0021 の修正を継承)。
+                            None => {
+                                let base = self.tsbpd_time_base + self.tsbpd_delay_us;
+                                if self.wrapping_period_active {
+                                    base + MAX_TIMESTAMP + 1
+                                } else {
+                                    base
+                                }
+                            }
                         }
                     });
                 now.as_micros() > estimated_delivery + tlpktdrop_threshold
@@ -1207,8 +1222,8 @@ mod tests {
         assert_eq!(buf.loss_list, vec![1000]);
 
         // TLPKTDROP = max(1.25 * 120_000, 1_000_000) = 1_000_000μs
-        // estimated_delivery = 500_000 + 120_000 = 620_000
-        // now = 2_000_000 > 620_000 + 1_000_000 = 1_620_000 なので削除される
+        // 次側パケット seq 1001 の delivery_time = 500_000 + 200_000 + 120_000 = 820_000
+        // now = 2_000_000 > 820_000 + 1_000_000 = 1_820_000 なので削除される
         let dropped = buf.drop_too_late(Timestamp::from_micros(2_000_000));
         assert_eq!(dropped, vec![1000]);
     }
@@ -1224,14 +1239,16 @@ mod tests {
         // 1000 を受信 (delivery_time = 500_000 + 100_000 + 500_000 = 1_100_000)
         buf.receive(make_packet(1000, 100_000), now);
         // 1002 を受信して 1001 が損失として登録される
-        // (1001 は未受信のため estimated_delivery = 500_000 + 500_000 = 1_000_000)
+        // 1001 の推定配信時刻は次側パケット seq 1002 の delivery_time
+        // = 500_000 + 300_000 + 500_000 = 1_300_000
         buf.receive(make_packet(1002, 300_000), now);
 
         // TLPKTDROP = max(1.25 * 500_000, 1_000_000) = 1_000_000
         // 1000: delivery = 1_100_000, 1_100_000 + 1_000_000 = 2_100_000
-        // 1001: estimated = 1_000_000, 1_000_000 + 1_000_000 = 2_000_000
-        // now = 2_050_000: 1000 は未到達、1001 は超過 → 1001 のみ削除
-        let dropped = buf.drop_too_late(Timestamp::from_micros(2_050_000));
+        // 1001: estimated = 1_300_000, 1_300_000 + 1_000_000 = 2_300_000
+        // now = 2_200_000: 1000 は超過、1001 は未到達 → 1000 のみ削除 (1000 は loss_list にないので削除されない)
+        // now = 2_400_000: 両方超過 → 1001 が削除される
+        let dropped = buf.drop_too_late(Timestamp::from_micros(2_400_000));
         assert_eq!(dropped, vec![1001]);
         assert_eq!(buf.loss_list, Vec::<u32>::new());
     }
@@ -1388,18 +1405,17 @@ mod tests {
         buf.receive(make_packet(1002, 200_000), now);
         assert!(buf.loss_list.contains(&1001));
 
-        // wrapping_period_active が有効なので、フォールバック式は
-        // tsbpd_time_base + tsbpd_delay_us + MAX_TIMESTAMP + 1
-        // = 500_000 + 120_000 + 4_294_967_296
-        // = 4_295_587_296 μs
+        // wrapping_period_active が有効な場合、次側パケット seq 1002 の delivery_time が
+        // 推定配信時刻として使用される。seq 1002 の delivery_time はラップ補正付きで
+        // = 500_000 + 200_000 + MAX_TIMESTAMP + 1 + 120_000 = 4_295_787_296 μs
         // TLPKTDROP = max(1.25 * 120_000, 1_000_000) = 1_000_000
-        // now = 4_295_587_296 + 1_000_000 = 4_296_587_296 で削除される。
+        // now = 4_295_787_296 + 1_000_000 = 4_296_787_296 で削除される。
         // それより前の時刻では削除されない。
-        let before = Timestamp::from_micros(4_295_587_000);
+        let before = Timestamp::from_micros(4_295_787_000);
         let dropped = buf.drop_too_late(before);
         assert!(dropped.is_empty(), "閾値未満では削除されないはず");
 
-        let after = Timestamp::from_micros(4_296_588_000);
+        let after = Timestamp::from_micros(4_296_788_000);
         let dropped = buf.drop_too_late(after);
         assert_eq!(dropped, vec![1001], "閾値超過で削除されるはず");
     }
