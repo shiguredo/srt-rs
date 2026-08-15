@@ -346,16 +346,16 @@ impl SenderBuffer {
     pub fn drop_expired(&mut self, now: Timestamp) -> Vec<u32> {
         let mut dropped = Vec::new();
 
+        // TLPKTDROP 閾値: SRT latency の 1.25 倍、最低 1 秒
+        // 仕様 (draft-sharabayko-srt.md の #too-late-packet-drop 節) の推奨値に従う。
+        let threshold = (self.latency_us * 125 / 100).max(1_000_000);
+
         let expired: Vec<u32> = self
             .packets
             .iter()
             .filter_map(|(&seq, entry)| {
                 let elapsed = now.as_micros().saturating_sub(entry.sent_time.as_micros());
-                if elapsed > self.latency_us {
-                    Some(seq)
-                } else {
-                    None
-                }
+                if elapsed > threshold { Some(seq) } else { None }
             })
             .collect();
 
@@ -549,5 +549,62 @@ mod tests {
         // filter の場合: 全巡回 → ラップ前も削除される
         buf.handle_ack(2);
         assert_eq!(buf.packets_in_flight(), 1);
+    }
+
+    #[test]
+    fn test_drop_expired_threshold_1s_floor() {
+        // latency_ms = 10 (10ms) の場合、1.25 * 10_000 = 12_500 < 1_000_000 なので
+        // 閾値は 1_000_000 (1 秒) になる。
+        let mut buf = SenderBuffer::new(0, 8192, 10);
+        let send_time = Timestamp::from_micros(0);
+        buf.push(vec![1], 100, 1, send_time);
+
+        // elapsed = 1_000_000 は閾値と等しいので drop されない (> 判定)
+        let now = Timestamp::from_micros(1_000_000);
+        let dropped = buf.drop_expired(now);
+        assert!(dropped.is_empty(), "等号では drop されないはず");
+
+        // elapsed = 1_000_001 は閾値を超えるので drop される
+        let now = Timestamp::from_micros(1_000_001);
+        let dropped = buf.drop_expired(now);
+        assert_eq!(dropped, vec![0], "閾値超過で drop されるはず");
+    }
+
+    #[test]
+    fn test_drop_expired_threshold_125pct() {
+        // latency_ms = 1000 (1000ms) の場合、1.25 * 1_000_000 = 1_250_000 > 1_000_000 なので
+        // 閾値は 1_250_000 になる。
+        let mut buf = SenderBuffer::new(0, 8192, 1000);
+        let send_time = Timestamp::from_micros(0);
+        buf.push(vec![1], 100, 1, send_time);
+
+        // elapsed = 1_250_000 は閾値と等しいので drop されない (> 判定)
+        let now = Timestamp::from_micros(1_250_000);
+        let dropped = buf.drop_expired(now);
+        assert!(dropped.is_empty(), "等号では drop されないはず");
+
+        // elapsed = 1_250_001 は閾値を超えるので drop される
+        let now = Timestamp::from_micros(1_250_001);
+        let dropped = buf.drop_expired(now);
+        assert_eq!(dropped, vec![0], "閾値超過で drop されるはず");
+    }
+
+    #[test]
+    fn test_drop_expired_threshold_boundary() {
+        // latency_ms = 800 の場合、1.25 * 800_000 = 1_000_000 = max(1_000_000, 1_000_000) = 1_000_000
+        // 閾値はちょうど 1_000_000 になる (1 秒下限と 1.25 倍側の境界)。
+        let mut buf = SenderBuffer::new(0, 8192, 800);
+        let send_time = Timestamp::from_micros(0);
+        buf.push(vec![1], 100, 1, send_time);
+
+        // elapsed = 1_000_000 は閾値と等しいので drop されない
+        let now = Timestamp::from_micros(1_000_000);
+        let dropped = buf.drop_expired(now);
+        assert!(dropped.is_empty(), "境界値の等号では drop されないはず");
+
+        // elapsed = 1_000_001 は閾値を超えるので drop される
+        let now = Timestamp::from_micros(1_000_001);
+        let dropped = buf.drop_expired(now);
+        assert_eq!(dropped, vec![0], "境界値の超過で drop されるはず");
     }
 }

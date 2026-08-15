@@ -206,7 +206,7 @@ proptest! {
 
     #[test]
     fn test_sender_buffer_drop_expired(
-        latency_ms in 10u16..100u16,
+        latency_ms in 10u16..1000u16,
     ) {
         let mut buf = SenderBuffer::new(0, 8192, latency_ms);
         let send_time = Timestamp::from_micros(0);
@@ -215,13 +215,17 @@ proptest! {
         buf.push(vec![1], 100, 1, send_time);
         buf.push(vec![2], 100, 1, send_time);
 
-        // latency 経過前は drop されない
-        let before_expire = Timestamp::from_micros((latency_ms as u64 * 1000) - 1000);
+        // 新閾値: max(latency_us * 125 / 100, 1_000_000)
+        let latency_us = latency_ms as u64 * 1000;
+        let threshold = (latency_us * 125 / 100).max(1_000_000);
+
+        // 閾値経過前は drop されない
+        let before_expire = Timestamp::from_micros(threshold.saturating_sub(1000));
         let dropped = buf.drop_expired(before_expire);
         prop_assert!(dropped.is_empty());
 
-        // latency 経過後は drop される
-        let after_expire = Timestamp::from_micros((latency_ms as u64 * 1000) + 1000);
+        // 閾値経過後は drop される
+        let after_expire = Timestamp::from_micros(threshold + 1000);
         let dropped = buf.drop_expired(after_expire);
         prop_assert_eq!(dropped.len(), 2);
     }
