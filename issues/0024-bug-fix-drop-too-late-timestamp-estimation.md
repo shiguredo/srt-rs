@@ -4,7 +4,7 @@
 - Created: 2026-05-14
 - Model: DeepSeek V4 Pro
 - Branch: feature/fix-drop-too-late-timestamp-estimation
-- Polished: 2026-07-31
+- Polished: 2026-08-15
 
 ## 目的
 
@@ -12,7 +12,7 @@
 
 ## 優先度根拠
 
-配送時刻を過小評価し、本来削除すべきでないパケットを早期削除する可能性がある。現行のフォールバックはタイムスタンプ 0 相当の推定であるため、ラップ区間内の経過時間 (最大約 71.6 分) が長くなるほど過小評価の幅が広がり、損失パケットは再送の到着より先にドロップされやすい (NAK は損失検出時に即時送信されるのに対し、`drop_too_late()` は ACK タイマー (10ms 周期) で呼ばれる)。ドロップの有害な結果 (再送機会の喪失による欠落) が顕在化するのは高損失時であるため Medium。
+配送時刻を過小評価し、本来削除すべきでないパケットを早期削除する可能性がある。現行のフォールバックはタイムスタンプ 0 相当の推定であるため、実際のタイムスタンプが大きいほど過小評価の幅が広がり、損失パケットは再送の到着より先にドロップされやすい (NAK は損失検出時に即時送信されるのに対し、`drop_too_late()` は ACK タイマー (10ms 周期) で呼ばれる)。ドロップの有害な結果 (再送機会の喪失による欠落) が顕在化するのは高損失時であるため Medium。
 
 ## 現状
 
@@ -44,15 +44,15 @@ draft-sharabayko-srt.md の `#packet-delivery-time` 節 (「Packet Delivery Time
 
 ## 設計方針
 
-- 欠損パケットの推定配信時刻は、次側の受信パケット (欠損後に受信済みの最小 seq。探索は 31-bit シーケンス番号の循環順で行う) の `delivery_time` をそのまま使用する。`delivery_time` は受信時に固定計算され 0021 のラップ補正が反映されるため、`tsbpd_time_base` からの再計算は行わない (再計算すると 0021 実装後の `tsbpd_time_base` 更新タイミング (配信時) と食い違い、ラップ境界で誤差が生じる)。次側の `delivery_time` は欠損パケットの真の配信時刻以上であるため、この推定は削除が遅れる側 (過大評価側) になる
-- 次側の受信パケットは、欠損検出のトリガーとなったパケットが受信済みであること、および配信が HoL ブロッキング (srt_receiver.rs の `find_deliverable_seq()` の `has_gap` 判定) でブロックされることにより、欠損が `loss_list` にある限りバッファに残る。直前側のパケットは配信済みで存在しないことが多いため、次側を基準とする
-- なお、次側の受信パケットが存在しない場合は、現行のフォールバック値 (`tsbpd_time_base + tsbpd_delay_us`) を防御的に維持する
+- 欠損パケットの推定配信時刻は、循環順で欠損 seq より大きい最小の受信済み seq (次側) の `delivery_time` をそのまま使用する。探索は `self.packets` (BTreeMap) から数値順で seq より大きい最初の要素を取得し、なければ最小の要素を取る 2 段階で行う。`delivery_time` は受信時に固定計算され 0021 のラップ補正が反映されるため、`tsbpd_time_base` からの再計算は行わない (再計算すると 0021 実装後の `tsbpd_time_base` 更新タイミング (配信時) と食い違い、ラップ境界で誤差が生じる)。次側の `delivery_time` は欠損パケットの真の配信時刻以上であるため、この推定は削除が遅れる側 (過大評価側) になる。タイムスタンプは実用上単調増加する (SRT ライブストリーミングでは送信元のオリジン時刻) ため、次側のタイムスタンプ >= 欠損パケットのタイムスタンプが前提として成り立つ
+- 次側の受信パケットは、欠損検出のトリガーとなったパケットが受信済みであること、および配信が HoL ブロッキング (srt_receiver.rs の `find_deliverable_seq()` の `has_gap` 判定) でブロックされることにより、欠損が `loss_list` にある限りバッファに残る。直前側のパケットは配信済みで存在しないことが多いため、次側を基準とする。`loss_list` に複数の欠損がある場合、各欠損 seq に対して個別に次側を探索する (複数の連続欠損が同じ次側を共有する場合も、各欠損の推定は独立に行う)
+- なお、次側の受信パケットが存在しない場合は、0021 実装後のフォールバック値 (`tsbpd_time_base + tsbpd_delay_us` + wrapping_period_active の場合は `MAX_TIMESTAMP + 1` の加算) を防御的に維持する (0021 のフォールバック拡張が本 issue の修正で上書きされないよう、0021 の修正を継承する式とする)
 - ラップ境界の扱いは 0021 (wrapping period の配信時終了判定とラップ補正) と整合させる。実装順は 0021 → 本 issue とし、0021 のラップ補正が入った後の `delivery_time` と整合する形で推定する (0021 の設計方針にも同旨の記述がある)
 
 ## 完了条件
 
 - 欠損パケットの推定配信時刻が次側の受信パケットの `delivery_time` を使用していること
 - 次側の選択がシーケンス番号の循環順で行われることを含め、新方式の挙動を検証するテストが追加されていること (ラップ境界での次側選択のケースも含む)
-- 既存の `test_drop_too_late_uses_tsbpd_time_base` と `test_drop_too_late_individual_delivery` (src/srt_receiver.rs の mod tests) が新方式に合わせて更新されていること
+- 既存の `test_drop_too_late_uses_tsbpd_time_base` と `test_drop_too_late_individual_delivery` (src/srt_receiver.rs の `#[cfg(test)]` モジュール) が新方式に合わせて更新されていること。`test_drop_too_late_uses_tsbpd_time_base` では、損失 seq 1000 の推定配信時刻が次側 seq 1001 の `delivery_time` (= `tsbpd_time_base + 200_000 + tsbpd_delay_us`) に変更される。`test_drop_too_late_individual_delivery` では、損失 seq 1001 の推定配信時刻が次側 seq 1002 の `delivery_time` に変更されるため、`now` の値とアサーションの見直しが必要になる
 - `cargo test` で全テストが通過すること
 - CHANGES.md の `## develop` セクションに `[FIX]` エントリが追加されていること
