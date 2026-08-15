@@ -34,8 +34,10 @@ const MAX_TIMESTAMP: u64 = 0xFFFF_FFFF;
 /// TSBPD ラップアラウンド期間: MAX_TIMESTAMP 到達の 30 秒前から開始
 const WRAPPING_PERIOD_START: u64 = MAX_TIMESTAMP - 30_000_000;
 
-/// TSBPD ラップアラウンド期間: タイムスタンプがこの値を超えたら終了
+/// TSBPD ラップアラウンド期間: タイムスタンプがこの範囲内で終了
 const WRAPPING_PERIOD_END_MIN: u64 = 30_000_000;
+
+/// TSBPD ラップアラウンド期間: タイムスタンプがこの値未満で終了する上限 (開区間)
 const WRAPPING_PERIOD_END_MAX: u64 = 60_000_000;
 
 /// ACK 送信時刻の追跡 (RTT 計算用)
@@ -511,7 +513,7 @@ impl ReceiverBuffer {
         // "ends once the packet with timestamp within (30, 60) seconds interval is delivered"
         if self.tsbpd_enabled && self.wrapping_period_active {
             let ts = entry.packet.timestamp as u64;
-            if (WRAPPING_PERIOD_END_MIN..=WRAPPING_PERIOD_END_MAX).contains(&ts) {
+            if (WRAPPING_PERIOD_END_MIN..WRAPPING_PERIOD_END_MAX).contains(&ts) {
                 self.tsbpd_time_base += MAX_TIMESTAMP + 1;
                 self.wrapping_period_active = false;
             }
@@ -1435,7 +1437,7 @@ mod tests {
         assert!(buf.wrapping_period_active);
 
         // 終了窗口パケット (ts = 40_000_000, 40 秒) を受信する。
-        // これは (WRAPPING_PERIOD_END_MIN..=WRAPPING_PERIOD_END_MAX) の範囲内。
+        // これは (WRAPPING_PERIOD_END_MIN..WRAPPING_PERIOD_END_MAX) の範囲内。
         // ラップ後パケットのため配信時刻に MAX_TIMESTAMP + 1 が加算される。
         let end_ts: u32 = 40_000_000;
         buf.receive(make_packet(1001, end_ts), now);

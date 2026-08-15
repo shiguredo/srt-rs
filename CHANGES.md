@@ -35,6 +35,8 @@
   - @voluntas
 - [FIX] drop_too_late の未受信パケット推定配送時刻を次側パケットの delivery_time に基づくよう修正する
   - @voluntas
+- [FIX] wrapping period 終了範囲の上限を開区間 (60 秒を含まない) に修正する
+  - @voluntas
 - [FIX] Listener が CONCLUSION 受信時に Caller の Initial Packet Sequence Number を採用するよう修正する
   - @voluntas
 
