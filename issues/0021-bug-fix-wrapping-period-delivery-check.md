@@ -12,7 +12,7 @@
 
 ## 優先度根拠
 
-受信時判定では、ラップ後のパケットの配信時刻が正しく計算されない問題を起こす。ラップ後 `ts` が 30 秒未満のパケットは終了判定が発火する前に旧 `tsbpd_time_base` で配信時刻が計算され、実時刻より約 71.6 分 (`MAX_TIMESTAMP` + 1) 過去になるため TSBPD 遅延なしで即配信される。ラップ境界は 1 時間 11 分 35 秒 (約 71.6 分) ごとのタイムスタンプのラップアラウンド時にしか訪れず、即時の破綻には至らないため Medium。なお、ラップ後のパケットより遅れて到着したラップ前パケットの配信時刻が約 71.6 分未来になる問題は、終了判定の発火後に到着したラップ前パケットが次周期の通常のラップ前パケット (同じく `ts` >= `WRAPPING_PERIOD_START` を持ち、開始判定を同じ状態で再発火させるパケット) と原理的に区別できないため本 issue のスコープ外とする。
+受信時判定では、ラップ後のパケットの配信時刻が正しく計算されない問題を起こす。ラップ後 `ts` が 30 秒未満のパケットは終了判定が発火する前に旧 `tsbpd_time_base` で配信時刻が計算され、実時刻より約 71.6 分 (`MAX_TIMESTAMP` + 1 = 4,294,967,296 μs) 過去にずれるため遅延が実質的に無効化され即時配信される。ラップ境界は 1 時間 11 分 35 秒 (71.58 分) ごとのタイムスタンプのラップアラウンド時にしか訪れず、即時の破綻には至らないため Medium。なお、ラップ後のパケットより遅れて到着したラップ前パケットの配信時刻が約 71.6 分未来になる問題は、終了判定の発火後に到着したラップ前パケットが次周期の通常のラップ前パケット (同じく `ts` >= `WRAPPING_PERIOD_START` を持ち、開始判定を同じ状態で再発火させるパケット) と原理的に区別できないため本 issue のスコープ外とする。
 
 ## 現状
 
@@ -49,9 +49,9 @@ draft-sharabayko-srt.md の `#tsbpd-time-base` 節 (「TSBPD Time Base Calculati
 
 ## 設計方針
 
-- wrapping period の終了判定と `tsbpd_time_base` の更新を `pop_ready()` に移動する。`receive()` には開始判定のみ残す。`pop_ready()` 内の終了判定は現行の開始判定と同様に TSBPD 有効を条件に実行すること (`handle_shutdown()` が TSBPD 無効化後に `pop_ready()` でバッファをフラッシュするパスでは終了判定を発火させない。いずれでも実害はないが挙動を確定させる)
-- `delivery_time` は `receive()` 内で固定計算されるため、終了判定の移動だけではラップ後のパケットの配信時刻が旧 `tsbpd_time_base` で計算されたままになる。ラップ後パケットには配信時刻に `MAX_TIMESTAMP` + 1 を加算する補正を導入し、ラップ境界で配信時刻の計算を整合させること。ラップ後パケットの判定条件は「`wrapping_period_active` が有効な間に受信した、`ts` が `WRAPPING_PERIOD_START` 未満のパケット」を基準に設計すること (ラップ前パケットの `ts` は `WRAPPING_PERIOD_START` 以上であるため衝突しない。`ts` の上限 (`WRAPPING_PERIOD_END_MAX`) で判定すると TSBPD 遅延が 30 秒を超える構成でラップ後パケットを取りこぼす)
-- `drop_too_late()` の未受信パケットの推定配信時刻 (srt_receiver.rs の `drop_too_late` 内のフォールバック値 `tsbpd_time_base + tsbpd_delay_us`) は `tsbpd_time_base` を直接参照するため、終了判定の移動で更新が遅れるとラップ後の損失パケットを約 71.6 分過去と推定して早期にドロップする。ラップ後パケットのフォールバック推定にも `MAX_TIMESTAMP` + 1 を加算する等、ラップ境界で `drop_too_late()` の挙動も整合させること。損失パケットはタイムスタンプを持たないため、加算の判定基準は `wrapping_period_active` が有効中かどうかとする (有効中はラップ前損失パケットは最大約 30 秒の過大推定 (ドロップが遅れる安全側) になり、ラップ後損失パケットは base 更新後と同じ推定になり約 71.6 分の過小推定を避ける)。このフォールバック式は 0024 の修正対象と同一であり、本 issue を先に実装してから 0024 で推定方法を修正する
+- wrapping period の終了判定と `tsbpd_time_base` の更新を `pop_ready()` に移動する。`receive()` には開始判定のみ残す。`pop_ready()` 内では `self.packets.remove(&delivery_seq)` で取得した `ReceivedPacket` から `packet.timestamp` を参照し、`ts` が `(WRAPPING_PERIOD_END_MIN..=WRAPPING_PERIOD_END_MAX)` の範囲内かつ `wrapping_period_active` が有効な場合に `tsbpd_time_base += MAX_TIMESTAMP + 1` を実行して `wrapping_period_active` を false にする。`pop_ready()` 内の終了判定は現行の開始判定と同様に TSBPD 有効を条件に実行すること (`handle_shutdown()` が TSBPD 無効化後に `pop_ready()` でバッファをフラッシュするパスでは終了判定を発火させない。いずれでも実害はないが挙動を確定させる)。なお、現行の受信時終了判定と異なり、終了窗口パケット (ts が 30〜60 秒) が受信済みでも `find_deliverable_seq()` の HoL ブロッキング (損失リストによる gap 判定) により配信が遅れると、その分だけ終了判定も遅れる。これは仕様の「is delivered (read from the buffer)」に従うための動作変更であり、受信時終了判定よりも安全側に倒れる
+- `delivery_time` は `receive()` 内で固定計算されるため、終了判定の移動だけではラップ後のパケットの配信時刻が旧 `tsbpd_time_base` で計算されたままになる。ラップ後パケットには配信時刻に `MAX_TIMESTAMP` + 1 を加算する補正を導入し、ラップ境界で配信時刻の計算を整合させること。ラップ後パケットの判定条件は「`wrapping_period_active` が有効な間に受信した、`ts` が `WRAPPING_PERIOD_START` 未満のパケット」を基準に設計すること (ラップ前パケットの `ts` は `WRAPPING_PERIOD_START` 以上であるため衝突しない。`ts` の上限 (`WRAPPING_PERIOD_END_MAX`) で判定すると TSBPD 遅延が 30 秒を超える構成でラップ後パケットを取りこぼす)。なお、`receive()` 内のコード順序では開始判定 (`ts >= WRAPPING_PERIOD_START` のチェック) が配信時刻計算 (`delivery_time` の計算) より前に実行されるため、開始判定をトリガーしたパケット自身 (`ts >= WRAPPING_PERIOD_START`) も `wrapping_period_active = true` の状態で配信時刻計算を通過するが、`ts < WRAPPING_PERIOD_START` の条件により補正は誤適用されない。この順序依存関係は実装時に注意すること
+- `drop_too_late()` の未受信パケットの推定配信時刻 (srt_receiver.rs の `drop_too_late` 内のフォールバック値 `tsbpd_time_base + tsbpd_delay_us`) は `tsbpd_time_base` を直接参照するため、終了判定の移動で更新が遅れるとラップ後の損失パケットを約 71.6 分過去と推定して早期にドロップする。損失パケットはタイムスタンプを持たないため、加算の判定基準は `wrapping_period_active` が有効中かどうかとし、有効中はフォールバック式を `tsbpd_time_base + tsbpd_delay_us + MAX_TIMESTAMP + 1` に拡張する (有効中はラップ前損失パケットは最大約 30 秒の過大推定 (ドロップが遅れる安全側) になり、ラップ後損失パケットは base 更新後と同じ推定になり約 71.6 分の過小推定を避ける)。このフォールバック式は 0024 の修正対象と同一であり、本 issue を先に実装してから 0024 で推定方法を修正する
 - 終了条件の境界値 (60 秒上限の開区間化) の見直しは 0044 のスコープであり、本 issue では判定式を変更せず移動と配信時刻の整合のみを行う。実装順は本 issue → 0044
 - 終了判定の発火後に遅延到着したラップ前パケットで開始判定が再発火し、`tsbpd_time_base` が二重に加算される問題は既存の問題であり、本 issue では扱わない
 - ラップ前窗口 (`ts` >= `WRAPPING_PERIOD_START`) のパケットが全て損失して開始判定が一度も発火しない場合、`wrapping_period_active` が有効化されず配信時刻補正と `tsbpd_time_base` の加算の両方が効かないが、これは現行実装と同じ挙動であり本 issue のスコープ外とする
@@ -63,7 +63,9 @@ draft-sharabayko-srt.md の `#tsbpd-time-base` 節 (「TSBPD Time Base Calculati
 
 ## 完了条件
 
-- wrapping period の終了判定と `tsbpd_time_base` の更新が `pop_ready()` で行われ、`receive()` に終了判定が残っていないこと (開始判定のみ残る)
+- wrapping period の終了判定と `tsbpd_time_base` の更新が `pop_ready()` で行われ、`receive()` に終了判定が残っていないこと (開始判定のみ残る)。`pop_ready()` 内の終了判定は TSBPD 有効時のみ実行されること
+- `receive()` 内でラップ後パケット (`wrapping_period_active` が有効かつ `ts` < `WRAPPING_PERIOD_START`) の配信時刻に `MAX_TIMESTAMP + 1` が加算されること
+- `drop_too_late()` のフォールバック推定式が `wrapping_period_active` の有効中に `MAX_TIMESTAMP + 1` を加算するよう修正されていること
 - ラップ後パケットの配信時刻が正しく計算され、配信タイミングと `drop_too_late()` のドロップ判定がラップ境界で崩れないことを検証するテストが追加されていること
 - `cargo test` で全テストが通過すること
 - CHANGES.md の `## develop` セクションに `[FIX]` エントリが追加されていること
