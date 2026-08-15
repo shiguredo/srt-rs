@@ -601,8 +601,13 @@ impl SrtConnection {
     }
 
     fn relative_timestamp(&self, now: Timestamp) -> u32 {
-        let start = self.start_time.unwrap_or(now);
-        (now.as_micros() - start.as_micros()) as u32
+        // start_time が未設定の場合は明示的に 0 を返す。
+        // ハンドシェイク中の Listener 側では start_time が未設定のまま呼ばれる。
+        // ハンドシェイクパケットのタイムスタンプは INDUCTION リクエストの
+        // hsreq_timestamp から TSBPD 時刻基準を計算するため、レスポンス側の
+        // タイムスタンプが 0 でも TSBPD の動作に影響しない。
+        self.start_time
+            .map_or(0, |s| now.as_micros().saturating_sub(s.as_micros())) as u32
     }
 
     fn handle_data_packet(&mut self, pkt: DataPacket, now: Timestamp) -> Result<(), Error> {

@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-05-14
+- Completed: 2026-08-15
 - Model: DeepSeek V4 Pro
 - Branch: feature/fix-relative-timestamp-start-time
 - Polished: 2026-08-15
@@ -43,3 +44,9 @@ fn relative_timestamp(&self, now: Timestamp) -> u32 {
 ## CHANGES.md
 
 バグ修正のため、`[FIX]` エントリ (`[FIX] relative_timestamp が start_time 未設定時に 0 を返すよう修正する`。担当者行を付けて追加すること) を追加する。
+
+## 解決方法
+
+- `relative_timestamp` を `unwrap_or(now)` から `map_or(0, ...)` に変更し、`start_time` が `None` の場合に明示的に `0` を返すようにした
+- `saturating_sub` を導入し、`start_time > now` 時の underflow を防止した
+- `CHANGES.md` の `## develop` セクションに `[FIX]` エントリを追加した

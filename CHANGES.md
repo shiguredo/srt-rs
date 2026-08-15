@@ -37,6 +37,8 @@
   - @voluntas
 - [FIX] wrapping period 終了範囲の上限を開区間 (60 秒を含まない) に修正する
   - @voluntas
+- [FIX] relative_timestamp が start_time 未設定時に 0 を返すよう修正する
+  - @voluntas
 - [FIX] Listener が CONCLUSION 受信時に Caller の Initial Packet Sequence Number を採用するよう修正する
   - @voluntas
 
