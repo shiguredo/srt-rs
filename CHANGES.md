@@ -29,6 +29,8 @@
   - @voluntas
 - [FIX] KeyFlag の KK フィールド判別子値を SRT 仕様に準拠するよう修正する
   - @voluntas
+- [FIX] TSBPD wrapping period の終了判定を受信時ではなくパケット配信時に行うよう修正し、ラップ境界の配信時刻計算を整合させる
+  - @voluntas
 - [FIX] Listener が CONCLUSION 受信時に Caller の Initial Packet Sequence Number を採用するよう修正する
   - @voluntas
 
