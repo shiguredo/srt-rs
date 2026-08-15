@@ -2,9 +2,19 @@
 
 - Priority: Medium
 - Created: 2026-05-14
+- Completed: 2026-08-15
 - Model: DeepSeek V4 Pro
 - Branch: feature/fix-wrapping-period-delivery-check
 - Polished: 2026-08-15
+
+## 解決方法
+
+- `receive()` から wrapping period 終了判定を削除し、開始判定のみを残した
+- `pop_ready()` に終了判定を移動し、配信パケットのタイムスタンプが `(WRAPPING_PERIOD_END_MIN..=WRAPPING_PERIOD_END_MAX)` の範囲内かつ `wrapping_period_active` が有効な場合に `tsbpd_time_base += MAX_TIMESTAMP + 1` を実行する実装を追加した
+- `receive()` 内でラップ後パケット (`wrapping_period_active` が有効かつ `ts < WRAPPING_PERIOD_START`) の配信時刻に `MAX_TIMESTAMP + 1` を加算する補正を導入した
+- `drop_too_late()` のフォールバック式に `wrapping_period_active` が有効中の `MAX_TIMESTAMP + 1` 加算を追加した
+- ラップ後パケットの配信時刻補正、`drop_too_late()` のフォールバック補正、`pop_ready()` 内の終了判定、TSBPD 無効時の終了判定非発火を検証するテストを追加した
+- `CHANGES.md` の `## develop` セクションに `[FIX]` エントリを追加した
 
 ## 目的
 
