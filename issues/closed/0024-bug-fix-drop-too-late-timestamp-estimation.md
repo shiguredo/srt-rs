@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-05-14
+- Completed: 2026-08-15
 - Model: DeepSeek V4 Pro
 - Branch: feature/fix-drop-too-late-timestamp-estimation
 - Polished: 2026-08-15
@@ -56,3 +57,11 @@ draft-sharabayko-srt.md の `#packet-delivery-time` 節 (「Packet Delivery Time
 - 既存の `test_drop_too_late_uses_tsbpd_time_base` と `test_drop_too_late_individual_delivery` (src/srt_receiver.rs の `#[cfg(test)]` モジュール) が新方式に合わせて更新されていること。`test_drop_too_late_uses_tsbpd_time_base` では、損失 seq 1000 の推定配信時刻が次側 seq 1001 の `delivery_time` (= `tsbpd_time_base + 200_000 + tsbpd_delay_us`) に変更される。`test_drop_too_late_individual_delivery` では、損失 seq 1001 の推定配信時刻が次側 seq 1002 の `delivery_time` に変更されるため、`now` の値とアサーションの見直しが必要になる
 - `cargo test` で全テストが通過すること
 - CHANGES.md の `## develop` セクションに `[FIX]` エントリが追加されていること
+
+## 解決方法
+
+- `drop_too_late()` のフォールバック式を、循環順で次側の受信パケットの `delivery_time` を推定値として使用する方式に変更した
+- 次側の探索は BTreeMap の `range` で seq より大きい最初の要素を取得し、なければ最小の要素を取る 2 段階で行う
+- 次側パケットが存在しない場合の防御的フォールバックは維持し、0021 のラップ補正を継承する
+- 既存テストの期待値を新方式に合わせて更新した
+- `CHANGES.md` の `## develop` セクションに `[FIX]` エントリを追加した
