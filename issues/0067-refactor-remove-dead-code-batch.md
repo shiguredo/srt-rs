@@ -1,8 +1,8 @@
 # 削除候補の一括対応 (デッドコード・未使用・過剰抽象化)
 
-- Priority: Medium
 - Created: 2026-08-16
 - Branch: feature/refactor-remove-dead-code-batch
+- Polished: 2026-08-16
 
 ## 目的
 
@@ -53,5 +53,10 @@ review-code で検出された以下の削除候補を一括で対応する。
 ## 完了条件
 
 - 上記の削除候補が適切に処理されていること
+- `CHANGES.md` の `## develop` セクションの `misc` に `[UPDATE]` エントリが追加されていること
 - `cargo test` で全テストが通過すること
 - `cargo clippy --workspace --all-targets -- -D warnings` が通過すること
+
+## 解決方法
+
+各項目について削除または維持を判断し、`src/srt_handshake.rs`、`src/srt_receiver.rs`、`src/srt_sender.rs`、`src/stream_id.rs`、`src/srt_connection.rs` の各ファイルを修正する。
