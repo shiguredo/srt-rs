@@ -1,8 +1,8 @@
 # process_retransmit で暗号化失敗時にエラーハンドリングが不十分
 
-- Priority: High
 - Created: 2026-08-16
-- Branch: feature/bug-fix-process-retransmit-encrypt-error-handling
+- Branch: feature/fix-process-retransmit-encrypt-error-handling
+- Polished: 2026-08-16
 
 ## 目的
 
@@ -26,4 +26,9 @@ if let Some(ref mut crypto) = self.crypto
 ## 完了条件
 
 - 暗号化失敗時にログ出力またはエラー伝播が行われること
+- `CHANGES.md` の `## develop` セクションに `[FIX]` エントリが追加されていること
 - `cargo test` で全テストが通過すること
+
+## 解決方法
+
+`src/srt_connection.rs` の `process_retransmit` メソッド内で、`crypto.encrypt` の失敗時に `tracing::error!` でログを出力し、該当パケットの再送をスキップする。`if let Ok(...)` を `match` に変更し、`Err` 分岐でログ出力と `continue` を行う。
