@@ -1,8 +1,8 @@
 # send_conclusion_request の KMREQ 追加失敗が握り潰される
 
-- Priority: High
 - Created: 2026-08-16
-- Branch: feature/bug-fix-conclusion-kmreq-silent-failure
+- Branch: feature/fix-conclusion-kmreq-silent-failure
+- Polished: 2026-08-16
 
 ## 目的
 
@@ -26,4 +26,9 @@ if let Some(ref crypto) = self.crypto
 ## 完了条件
 
 - `wrap_sek` 失敗時にエラーが伝播されるか、またはログに出力されること
+- `CHANGES.md` の `## develop` セクションに `[FIX]` エントリが追加されていること
 - `cargo test` で全テストが通過すること
+
+## 解決方法
+
+`src/srt_connection.rs` の `send_conclusion_request` メソッドの戻り値を `Result<(), Error>` に変更し、`wrap_sek` の失敗を `?` 演算子で呼び出し元に伝播させる。`send_conclusion_request` の呼び出し元 (`handle_handshake_caller` の INDUCTION 分岐、および `handle_handshake_listener` の CONCLUSION 分岐) でエラーをハンドリングする。

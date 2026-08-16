@@ -1,8 +1,8 @@
 # loss_list の Vec を HashSet に変更して O(n) 線形探索を解消する
 
-- Priority: High
 - Created: 2026-08-16
 - Branch: feature/refactor-loss-list-hashset
+- Polished: 2026-08-16
 
 ## 目的
 
@@ -27,4 +27,9 @@ if !self.packets.contains_key(&s) && !self.loss_list.contains(&s) {
 ## 完了条件
 
 - `loss_list` が `HashSet<u32>` に変更されていること
+- `CHANGES.md` の `## develop` セクションの `misc` に `[UPDATE]` エントリが追加されていること
 - `cargo test` で全テストが通過すること
+
+## 解決方法
+
+`src/srt_receiver.rs` の `ReceiverBuffer` 構造体の `loss_list` フィールドの型を `Vec<u32>` から `HashSet<u32>` に変更する。`push` は `insert` に置き換え、`iter` を必要とする箇所では `iter().copied()` を使用する。
