@@ -1,8 +1,8 @@
 # handle_timer の Retransmit タイマーが処理後に再設定されない
 
-- Priority: High
 - Created: 2026-08-16
-- Branch: feature/bug-fix-retransmit-timer-reset
+- Branch: feature/fix-retransmit-timer-reset
+- Polished: 2026-08-16
 
 ## 目的
 
@@ -27,4 +27,9 @@ TimerId::Retransmit => {
 ## 完了条件
 
 - `Retransmit` タイマーの再設定が追加されるか、タイマー駆動の再送が不要であることをコメントで明示すること
+- `CHANGES.md` の `## develop` セクションに `[FIX]` エントリが追加されていること
 - `cargo test` で全テストが通過すること
+
+## 解決方法
+
+`src/srt_connection.rs` の `handle_timer` メソッド内の `Retransmit` 分岐で、他のタイマーと同様に `SetTimer` で次のタイマーを再設定する。または、タイマー駆動の再送が不要であることをコメントで明示する。
