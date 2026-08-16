@@ -1,8 +1,8 @@
 # テスト不足領域の追加
 
-- Priority: Medium
 - Created: 2026-08-16
 - Branch: feature/test-add-missing-tests
+- Polished: 2026-08-16
 
 ## 目的
 
@@ -55,4 +55,9 @@ review-code で検出された以下のテスト不足領域に対してテス�
 ## 完了条件
 
 - 上記の全テストが追加されていること
+- `CHANGES.md` の `## develop` セクションの `misc` に `[UPDATE]` エントリが追加されていること
 - `cargo test --workspace` で全テストが通過すること
+
+## 解決方法
+
+各項目についてテストを追加する。PBT で実現できるものは `pbt/` に、単体テストでなければならないものは `tests/` に書く。
