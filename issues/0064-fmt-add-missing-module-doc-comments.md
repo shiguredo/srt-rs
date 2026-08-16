@@ -1,8 +1,8 @@
 # lib.rs / error.rs / buf.rs / time.rs に //! モジュールドキュメントが不足している
 
-- Priority: High
 - Created: 2026-08-16
 - Branch: feature/fmt-add-missing-module-doc-comments
+- Polished: 2026-08-16
 
 ## 目的
 
@@ -27,3 +27,8 @@ shiguredo-rust 規約「`src/<module>.rs` の先頭にそのモジュールの�
 
 - 上記の全モジュールに `//!` が追加されていること
 - `cargo doc` で警告が発生しないこと
+- `cargo test --workspace` が通過すること
+
+## 解決方法
+
+各モジュールファイルの先頭に `//!` でモジュールの責務を 1〜2 行で書く。
