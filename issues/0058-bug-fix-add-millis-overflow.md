@@ -1,8 +1,8 @@
 # add_millis の millis * 1000 がオーバーフローする
 
+- Priority: High
 - Created: 2026-08-16
-- Branch: feature/fix-add-millis-overflow
-- Polished: 2026-08-16
+- Branch: feature/bug-fix-add-millis-overflow
 
 ## 目的
 
@@ -23,9 +23,4 @@ pub fn add_millis(&self, millis: u64) -> Self {
 ## 完了条件
 
 - `millis * 1000` が `millis.saturating_mul(1000)` に変更されていること
-- `CHANGES.md` の `## develop` セクションに `[FIX]` エントリが追加されていること
 - `cargo test` で全テストが通過すること
-
-## 解決方法
-
-`src/time.rs` の `Timestamp::add_millis` メソッド内の `millis * 1000` を `millis.saturating_mul(1000)` に変更する。

@@ -1,12 +1,12 @@
 # ACKACK 送信条件が仕様より緩い
 
+- Priority: High
 - Created: 2026-08-16
-- Branch: feature/fix-ackack-condition-too-loose
-- Polished: 2026-08-16
+- Branch: feature/bug-fix-ackack-condition-too-loose
 
 ## 目的
 
-`src/srt_connection.rs` の `handle_ack` メソッド内で、`pkt.control_info.len() >= 16` で ACKACK を送信している。SRT 仕様では「The sender only acknowledges the receipt of Full ACK packets」と規定されており、Full ACK の CIF (Control Information Field) は 28 bytes である。現在の Small ACK は未実装だが、将来 Small ACK (16 bytes) が実装された場合に、誤って ACKACK を送信してしまう。
+`src/srt_connection.rs` の `handle_ack` メソッド内で、`pkt.control_info.len() >= 16` で ACKACK を送信している。仕様 (draft-sharabayko-srt.md) では「The sender only acknowledges the receipt of Full ACK packets」と規定されており、Full ACK の CIF は 28 bytes (ack_seq + RTT + RTTVar + Buffer + Packet Rate + Link Capacity + Recv Rate) である。現在の Small ACK は未実装だが、将来実装された場合に Small ACK (16 bytes) でも ACKACK を送信してしまう。
 
 ## 現状
 
@@ -18,14 +18,9 @@ if pkt.control_info.len() >= 16 {
 
 ## 設計方針
 
-`pkt.control_info.len() >= 16` を `pkt.control_info.len() >= 28` に変更する。
+`pkt.control_info.len() >= 28` に変更する。
 
 ## 完了条件
 
-- ACKACK 送信条件が `>= 28`（Full ACK の CIF サイズ）に変更されていること
-- `CHANGES.md` の `## develop` セクションに `[FIX]` エントリが追加されていること
+- ACKACK 送信条件が Full ACK の CIF サイズ (28 bytes) に変更されていること
 - `cargo test` で全テストが通過すること
-
-## 解決方法
-
-`src/srt_connection.rs` の `handle_ack` メソッド内のしきい値を `16` から `28` に変更する。

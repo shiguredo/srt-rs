@@ -1,8 +1,8 @@
 # 受信バッファに明示的な上限がない
 
+- Priority: High
 - Created: 2026-08-16
-- Branch: feature/fix-receiver-buffer-no-limit
-- Polished: 2026-08-16
+- Branch: feature/bug-fix-receiver-buffer-no-limit
 
 ## 目的
 
@@ -23,9 +23,4 @@ packets: BTreeMap<u32, ReceivedPacket>,
 ## 完了条件
 
 - `ReceiverBuffer` にバッファ上限が設定され、超過時にパケットがドロップされること
-- `CHANGES.md` の `## develop` セクションに `[FIX]` エントリが追加されていること
 - `cargo test` で全テストが通過すること
-
-## 解決方法
-
-`src/srt_receiver.rs` の `ReceiverBuffer` 構造体に `max_buffer_size: u32` フィールドを追加し、`new` メソッドで受け取る。`receive` メソッド内で `packets.len() >= max_buffer_size` の場合に最も古いパケットをドロップする。

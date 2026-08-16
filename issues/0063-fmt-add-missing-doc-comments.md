@@ -1,8 +1,8 @@
 # 公開メソッドに /// ドキュメントコメントが不足している
 
+- Priority: High
 - Created: 2026-08-16
 - Branch: feature/fmt-add-missing-doc-comments
-- Polished: 2026-08-16
 
 ## 目的
 
@@ -25,8 +25,3 @@ shiguredo-rust 規約「公開 API には必ず `///` を書くこと」に違�
 
 - 上記の全公開メソッドに `///` が追加されていること
 - `cargo doc` で警告が発生しないこと
-- `cargo test --workspace` が通過すること
-
-## 解決方法
-
-各ファイルの公開メソッドに `///` ドキュメントコメントを追加する。利用者視点で「それが何であるか・何をするか」を書く。

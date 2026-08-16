@@ -1,8 +1,8 @@
 # encode_le_words が UTF-8 バイト境界を無視して切り詰める
 
+- Priority: High
 - Created: 2026-08-16
-- Branch: feature/fix-encode-le-words-utf8-boundary
-- Polished: 2026-08-16
+- Branch: feature/bug-fix-encode-le-words-utf8-boundary
 
 ## 目的
 
@@ -22,10 +22,5 @@ let truncated = &bytes[..len];
 ## 完了条件
 
 - 512 バイト境界がマルチバイト文字の途中に当たる場合でも、不完全な UTF-8 シーケンスが生成されないこと
-- マルチバイト文字の境界テストが追加されていること
-- `CHANGES.md` の `## develop` セクションに `[FIX]` エントリが追加されていること
 - `cargo test` で全テストが通過すること
-
-## 解決方法
-
-`src/srt_handshake.rs` の `encode_le_words` 関数内で、`bytes[..len]` の代わりに `bytes[..bytes.floor_char_boundary(len)]` を使用して UTF-8 文字境界で切り詰める。テストは `tests/test_srt_handshake.rs` に追加し、マルチバイト文字が境界にかかるケースを検証する。
+- マルチバイト文字の境界テストが追加されていること
