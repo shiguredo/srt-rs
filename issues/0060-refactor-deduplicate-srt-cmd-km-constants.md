@@ -1,8 +1,8 @@
 # SRT_CMD_KMREQ と SRT_CMD_KMRSP の定数が重複定義されている
 
-- Priority: High
 - Created: 2026-08-16
 - Branch: feature/refactor-deduplicate-srt-cmd-km-constants
+- Polished: 2026-08-16
 
 ## 目的
 
@@ -29,4 +29,9 @@ const SRT_CMD_KMRSP: u16 = 4;
 ## 完了条件
 
 - `SRT_CMD_KMREQ` と `SRT_CMD_KMRSP` がモジュールレベルの定数として 1 箇所に定義されていること
+- `CHANGES.md` の `## develop` セクションの `misc` に `[UPDATE]` エントリが追加されていること
 - `cargo test` で全テストが通過すること
+
+## 解決方法
+
+`src/srt_connection.rs` の `impl SrtConnection` ブロックの外側に `const SRT_CMD_KMREQ: u16 = 3;` と `const SRT_CMD_KMRSP: u16 = 4;` を定義し、`handle_user_defined`、`send_km_request`、`send_km_response` 内の重複定義を削除する。
