@@ -1,8 +1,8 @@
 # lib.rs の re-export が shiguredo-rust 規約に違反する
 
-- Priority: High
 - Created: 2026-08-16
 - Branch: feature/refactor-remove-lib-reexport
+- Polished: 2026-08-16
 
 ## 目的
 
@@ -30,4 +30,9 @@ pub use time::Timestamp;
 
 - `lib.rs` からすべての `pub use` が削除されていること
 - `examples/`、`crates/c-api/`、`pbt/`、`tests/` の全 import が修正されていること
+- `CHANGES.md` の `## develop` セクションの `misc` に `[UPDATE]` エントリが追加されていること
 - `cargo test --workspace` で全テストが通過すること
+
+## 解決方法
+
+`src/lib.rs` からすべての `pub use` 行を削除する。`examples/`、`crates/c-api/`、`pbt/`、`tests/` の全 import を、`use shiguredo_srt::CryptoContext` から `use shiguredo_srt::crypto::CryptoContext` のように元のモジュールから直接 import する形式に修正する。
