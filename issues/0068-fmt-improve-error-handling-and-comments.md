@@ -1,8 +1,8 @@
 # 改善提案の一括対応 (エラーハンドリング・コメント・命名)
 
-- Priority: Medium
 - Created: 2026-08-16
 - Branch: feature/fmt-improve-error-handling-and-comments
+- Polished: 2026-08-16
 
 ## 目的
 
@@ -71,4 +71,9 @@ srt_caller は getrandom クレート、srt_listener は aws_lc_rs::rand::fill �
 ## 完了条件
 
 - 上記の改善提案が適切に処理されていること
+- `CHANGES.md` の `## develop` セクションの `misc` に `[UPDATE]` エントリが追加されていること
 - `cargo test` で全テストが通過すること
+
+## 解決方法
+
+各項目について修正を実施する。緊急度の低い項目は pending にしてもよい。
