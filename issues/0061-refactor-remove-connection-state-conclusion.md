@@ -1,8 +1,8 @@
 # ConnectionState::Conclusion が write-only で使われていない
 
-- Priority: High
 - Created: 2026-08-16
 - Branch: feature/refactor-remove-connection-state-conclusion
+- Polished: 2026-08-16
 
 ## 目的
 
@@ -31,4 +31,9 @@ pub enum ConnectionState {
 
 - `ConnectionState::Conclusion` が削除されていること
 - C API 側の `SrtConnectionState::Conclusion` も削除または適切に処理されていること
+- `CHANGES.md` の `## develop` セクションの `misc` に `[UPDATE]` エントリが追加されていること
 - `cargo test` で全テストが通過すること
+
+## 解決方法
+
+`src/srt_connection.rs` の `ConnectionState` 列挙型から `Conclusion` バリアントを削除する。`crates/c-api/src/lib.rs` の `SrtConnectionState` 列挙型からも `Conclusion` を削除し、関連するマッピングコードを除去する。
