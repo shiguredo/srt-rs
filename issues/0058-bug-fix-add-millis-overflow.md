@@ -25,10 +25,12 @@ pub fn add_millis(&self, millis: u64) -> Self {
 ## 完了条件
 
 - `millis * 1000` が `millis.saturating_mul(1000)` に変更されていること
-- `u64::MAX` を超える `millis` を `add_millis` に渡しても panic せず、結果が `u64::MAX` マイクロ秒に saturate することを検証するテストが追加されていること
+- オーバーフロー境界を超える `millis` を `add_millis` に渡しても panic せず、結果が `u64::MAX` マイクロ秒に saturate することを検証するテストが追加されていること (境界値: `millis` = 18,446,744,073,709,552)
 - `CHANGES.md` の `## develop` セクションに `[FIX]` エントリが追加されていること
 - `cargo test` で全テストが通過すること
 
 ## 解決方法
 
-`src/time.rs` の `Timestamp::add_millis` メソッド内の `millis * 1000` を `millis.saturating_mul(1000)` に変更する。テストは `src/time.rs` 内の `#[cfg(test)]` モジュールに追加し、オーバーフロー境界 (millis = 18,446,744,073,709,552) で panic せず saturate することを検証する。
+`src/time.rs` の `Timestamp::add_millis` メソッド内の `millis * 1000` を `millis.saturating_mul(1000)` に変更する。テストは `src/time.rs` 内の `#[cfg(test)]` モジュールに追加し、オーバーフロー境界 (`millis` = 18,446,744,073,709,552) で panic せず saturate することを検証する。
+
+なお、open issue 0038 (`tests/` へのテスト追加) は `add_millis` の PBT (任意の `millis` に対する saturate 挙動) を計画しているため、本 issue の境界値テスト (単体テスト) と役割分担する。実装順は本 issue (バグ修正) が先である。
