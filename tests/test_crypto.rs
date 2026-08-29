@@ -1,4 +1,4 @@
-//! src/crypto.rs に対応する単体テスト (Known Answer Test)
+//! src/crypto.rs に対応する単体テスト (Known Answer Test と Debug マスク)
 //!
 //! AES-CTR のカウンタブロック構築が SRT 仕様
 //! (draft-sharabayko-srt.md の「Encryption」セクション内「AES Counter」サブセクション)
@@ -22,6 +22,10 @@
 //! test_salt_low_bytes_do_not_affect_ciphertext が encrypt_payload の内部を参照せず外部観測で
 //! 独立に検証する。一方、packet index が bytes 10-13 に置かれること自体の絶対的な正しさは
 //! KAT・PBT のいずれでも独立検証されておらず、上記の libsrt 突き合わせに依拠する。
+//!
+//! Debug マスク系のテストは、どのフィールドがマスクされどのフィールドが素で出るかという
+//! 構造の検証が主眼であり、マスク出力は入力に依存しない固定リテラルなので任意入力の生成は
+//! 意味を持たない。したがって PBT でなく単体テストで検証する。
 
 use aws_lc_rs::cipher::{AES_128, AES_256, DecryptingKey, DecryptionContext, UnboundCipherKey};
 use aws_lc_rs::iv::{FixedLength, IV_LEN_128_BIT};
@@ -161,4 +165,73 @@ fn aes256_kat_packet_index_nonzero() {
         0xAA, 0xAA,
     ];
     assert_kat(KeyLength::Aes256, salt, &sek, 0x1234_5678, &plaintext);
+}
+
+#[test]
+fn debug_masks_secret_key_material() {
+    // 偶数鍵・奇数鍵に判別しやすい値を入れ、`{:?}` が鍵バイト列を漏らさないことを確認する。
+    let salt: [u8; 16] = [0x11; 16];
+    let sek_even: [u8; 16] = [0xA1; 16];
+    let sek_odd: [u8; 16] = [0xB2; 16];
+    let mut crypto = CryptoContext::new_sender("passphrase", KeyLength::Aes128, salt, &sek_even)
+        .expect("Sender コンテキストの生成は成功する想定");
+    crypto
+        .start_pre_announce(&sek_odd)
+        .expect("事前通知は正常な鍵で成功する想定");
+
+    let output = format!("{crypto:?}");
+
+    // フィールド名を添えて照合し、マスク対象と非マスク対象の取り違え (`kek` を素で出して
+    // `salt` をマスクする等) を検出できるようにする。
+    for field in ["kek", "sek_even", "sek_odd"] {
+        assert!(
+            output.contains(&format!(r#"{field}: "[REDACTED]""#)),
+            "{field} がマスクされていない: {output}"
+        );
+    }
+    // マスクは鍵素材の 3 フィールドだけ。過剰マスク (鍵素材以外を消してしまう変更) を
+    // 検出するための検証であり、漏洩自体は上のフィールド名照合と下の非含有検証で押さえる。
+    assert_eq!(
+        output.matches("[REDACTED]").count(),
+        3,
+        "マスクされたフィールド数が 3 と一致しない: {output}"
+    );
+    // kek は PBKDF2 の導出値をテスト側で再現せずに確認できないため、フィールド名の照合に任せる。
+    assert!(
+        !output.contains(&format!("{:?}", sek_even)),
+        "sek_even のバイト列が Debug 出力に漏れている: {output}"
+    );
+    assert!(
+        !output.contains(&format!("{:?}", sek_odd)),
+        "sek_odd のバイト列が Debug 出力に漏れている: {output}"
+    );
+}
+
+#[test]
+fn debug_shows_non_secret_fields() {
+    // マスクの誤適用で salt やカウンタまで消えると Debug 出力がデバッグに使えなくなる。
+    // 前テストが鍵素材がマスクされていること (漏洩の防止) を見るのに対し、こちらはマスクが
+    // 鍵素材以外に及んでいないこと (出力の有用性の担保) を見る。
+    let salt: [u8; 16] = [0x11; 16];
+    let sek_even: [u8; 16] = [0xA1; 16];
+    let crypto = CryptoContext::new_sender("passphrase", KeyLength::Aes128, salt, &sek_even)
+        .expect("Sender コンテキストの生成は成功する想定");
+
+    let output = format!("{crypto:?}");
+
+    // 公開アクセサを持つ値は列挙型の derive 表現を直書きせず、アクセサから期待値を組み立てる。
+    // encrypted_packet_count と next_key は公開アクセサを持たないため初期値を直書きする。
+    for expected in [
+        format!("salt: {:?}", crypto.salt()),
+        format!("current_key: {:?}", crypto.current_key()),
+        format!("key_length: {:?}", crypto.key_length()),
+        format!("km_refresh_state: {:?}", crypto.km_refresh_state()),
+        "encrypted_packet_count: 0".to_string(),
+        "next_key: None".to_string(),
+    ] {
+        assert!(
+            output.contains(&expected),
+            "Debug 出力に {expected} が含まれない: {output}"
+        );
+    }
 }

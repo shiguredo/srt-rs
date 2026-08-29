@@ -41,6 +41,8 @@
   - @voluntas
 - [FIX] Listener が CONCLUSION 受信時に Caller の Initial Packet Sequence Number を採用するよう修正する
   - @voluntas
+- [FIX] CryptoContext の Debug 出力で鍵素材がマスクされず漏洩する問題を修正する
+  - @voluntas
 
 ### misc
 
