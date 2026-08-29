@@ -1,6 +1,7 @@
 # add_millis の millis * 1000 がオーバーフローする
 
 - Created: 2026-08-16
+- Completed: 2026-08-29
 - Branch: feature/fix-add-millis-overflow
 - Polished: 2026-08-16
 
@@ -31,6 +32,11 @@ pub fn add_millis(&self, millis: u64) -> Self {
 
 ## 解決方法
 
-`src/time.rs` の `Timestamp::add_millis` メソッド内の `millis * 1000` を `millis.saturating_mul(1000)` に変更する。テストは `src/time.rs` 内の `#[cfg(test)]` モジュールに追加し、オーバーフロー境界 (`millis` = 18,446,744,073,709,552) で panic せず saturate することを検証する。
-
-なお、open issue 0038 (`tests/` へのテスト追加) は `add_millis` の PBT (任意の `millis` に対する saturate 挙動) を計画しているため、本 issue の境界値テスト (単体テスト) と役割分担する。実装順は本 issue (バグ修正) が先である。
+- `src/time.rs` の `Timestamp::add_millis` 内の `millis * 1000` を `millis.saturating_mul(1000)` に変更した。`///` には「換算値と元のマイクロ秒値の合計が `u64` の範囲に収まらない場合は panic せず `u64::MAX` マイクロ秒で飽和する」という契約を記載し、`//` にはエラーを返さず飽和させる理由 (`add_micros` も `saturating_add` を使う型の一貫性) を書いた
+- `src/time.rs` 内の `#[cfg(test)]` モジュールに境界値テスト 3 件を追加した
+  - `test_add_millis_saturates_over_boundary`: 乗算が溢れる境界 (`millis` = 18,446,744,073,709,552) と `millis` = `u64::MAX` の極値で、panic せず結果が `u64::MAX` になること
+  - `test_add_millis_saturates_on_sum_overflow`: 換算値が範囲内でも元のマイクロ秒値との合計が溢れる経路で飽和すること
+  - `test_add_millis_below_boundary_is_exact`: 境界より 1 小さい値では飽和せず `(u64::MAX / 1000) * 1000` の正確な値になること (飽和が早すぎる実装の検出)、および飽和領域外で元の値が 0 以外となるケース
+- 変異検証で回帰検出を確認した。`saturating_mul` を元に戻すと 1 件目が debug では panic、release では wrap 値 (391) で失敗する。換算係数を `1_000_000` に壊すと 3 件目が、`saturating_add` を `+` に壊すと 1・2 件目が失敗する
+- open issue 0038 の PBT (任意の `millis` に対する換算の等価性) と役割分担するため、本 issue は境界値・極値の単体テストに限定した。実装順は本 issue が先
+- 関連する別経路として、`u64::MAX` 近傍の `now` を受信側に渡すと `src/srt_receiver.rs` の TSBPD 配信時刻計算 (非飽和の `+`) で debug は panic、release は wrap する問題が残る (旧来からの既知経路)。本 issue のスコープ外として別途 issue を立てる
