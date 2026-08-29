@@ -45,6 +45,8 @@
   - @voluntas
 - [FIX] Timestamp::add_millis の大きな millis で発生するオーバーフローによるパニックと誤った値の返却を修正する
   - @voluntas
+- [FIX] SYN Cookie 未設定時にフォールバックの 0 が使われ Cookie 検証が実質無効になる問題を修正し、接続ごとに暗号学的乱数を生成する
+  - @voluntas
 
 ### misc
 

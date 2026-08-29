@@ -1,10 +1,13 @@
 //! SRT 接続の e2e テスト
 //!
 //! sansio パターンを活用して、実ソケットなしで Caller/Listener の相互接続をテストする。
+//!
+//! ハンドシェイクの一部テストは相互接続させず、`HandshakePacket` で組み立てたパケットを
+//! Listener 側に直接流し込む。
 
 use shiguredo_srt::{
-    ConnectionEvent, ConnectionOptions, ConnectionOutput, ConnectionState, KeyLength,
-    SrtConnection, TimerId, Timestamp,
+    ConnectionEvent, ConnectionOptions, ConnectionOutput, ConnectionState, Error, ErrorKind,
+    HandshakePacket, HandshakeType, KeyLength, SrtConnection, SrtPacket, TimerId, Timestamp,
 };
 
 /// テスト用のデフォルトオプション (TSBPD 遅延を 0 にして即時配信)
@@ -98,6 +101,56 @@ fn collect_received_data(conn: &mut SrtConnection) -> Vec<Vec<u8>> {
         }
     }
     data
+}
+
+/// Listener に INDUCTION リクエストを流し込み、INDUCTION レスポンスの SYN Cookie を取り出す
+///
+/// 応答は 1 本だけを想定している。`socket_id` は Cookie 検証に影響しない任意の Caller
+/// ソケット ID。
+fn exchange_induction_and_take_cookie(
+    listener: &mut SrtConnection,
+    socket_id: u32,
+    now: Timestamp,
+) -> u32 {
+    let request = HandshakePacket::new_induction_request(socket_id);
+    let mut buf = Vec::new();
+    SrtPacket::Control(request.encode(0, 0)).encode(&mut buf);
+    listener
+        .feed_recv_buf(&buf, now)
+        .expect("INDUCTION リクエストの処理は成功する想定");
+
+    let mut cookies = Vec::new();
+    while let Some(output) = listener.poll_output() {
+        if let ConnectionOutput::SendPacket(data) = output {
+            let packet = SrtPacket::decode(&data).expect("送信パケットのデコードは成功する想定");
+            if let SrtPacket::Control(control) = packet {
+                let response = HandshakePacket::decode(&control)
+                    .expect("INDUCTION 応答なのでハンドシェイクとしてデコードできる想定");
+                if response.handshake_type == HandshakeType::Induction {
+                    cookies.push(response.syn_cookie);
+                }
+            }
+        }
+    }
+    assert_eq!(cookies.len(), 1, "INDUCTION レスポンスは 1 本だけのはず");
+    cookies[0]
+}
+
+/// 指定した SYN Cookie を載せた CONCLUSION リクエストを Listener に流し込む
+///
+/// Listener が INDUCTION を受信済みでないと、Cookie 検証より手前のハンドシェイク状態の判定で
+/// `Ok(())` が返るだけ。
+/// 受理されたかどうかは呼び出し側で `state()` を確認する。
+fn feed_conclusion_with_cookie(
+    listener: &mut SrtConnection,
+    socket_id: u32,
+    syn_cookie: u32,
+    now: Timestamp,
+) -> Result<(), Error> {
+    let request = HandshakePacket::new_conclusion_request(socket_id, syn_cookie, 1000, 0, false);
+    let mut buf = Vec::new();
+    SrtPacket::Control(request.encode(0, 0)).encode(&mut buf);
+    listener.feed_recv_buf(&buf, now)
 }
 
 // ============================================================================
@@ -803,4 +856,111 @@ fn test_multiple_sends_before_transfer() {
     // 全データ受信を確認
     let received = collect_received_data(&mut listener);
     assert_eq!(received.len(), 5);
+}
+
+// ============================================================================
+// SYN Cookie テスト
+// ============================================================================
+
+#[test]
+fn test_syn_cookie_is_random_per_connection() {
+    // 未設定時の Cookie は接続 (SrtConnection) ごとに生成される乱数で、既知の固定値にならない。
+    let mut first_listener = SrtConnection::new_listener(test_options());
+    let mut second_listener = SrtConnection::new_listener(test_options());
+
+    let first = exchange_induction_and_take_cookie(&mut first_listener, 0x1111, ts(0));
+    let second = exchange_induction_and_take_cookie(&mut second_listener, 0x2222, ts(0));
+
+    assert_ne!(first, 0, "1 件目の Cookie が既知値の 0 のまま");
+    assert_ne!(second, 0, "2 件目の Cookie が既知値の 0 のまま");
+    assert_ne!(first, second, "接続ごとに Cookie が生成されていない");
+}
+
+#[test]
+fn test_syn_cookie_uses_full_32_bits() {
+    // Cookie が 16 ビットなどに縮退すると flooding で総当たり可能になる。8 接続中 1 本以上が
+    // 下位 16 ビットだけではない値を持つことを確認する (正しい実装での失敗確率 2^-128)。
+    let mut wide = false;
+    for i in 0..8 {
+        let mut listener = SrtConnection::new_listener(test_options());
+        let cookie = exchange_induction_and_take_cookie(&mut listener, 0x1000 + i, ts(0));
+        wide |= (cookie & 0xFFFF_0000) != 0;
+    }
+    assert!(wide, "Cookie が下位 16 ビット域に縮退している");
+}
+
+#[test]
+fn test_syn_cookie_stable_across_induction_retransmission() {
+    // UDP の重複配信で INDUCTION が再送されても Cookie は変わらない。INDUCTION 受信ごとに
+    // 再生成すると、先に受け取った Cookie を載せた CONCLUSION が正当なピアから届いても拒否する。
+    let mut listener = SrtConnection::new_listener(test_options());
+
+    let first = exchange_induction_and_take_cookie(&mut listener, 0x1111, ts(0));
+    let second = exchange_induction_and_take_cookie(&mut listener, 0x1111, ts(1_000));
+    assert_eq!(first, second, "INDUCTION 再送で Cookie が変わった");
+
+    // 1 本目の INDUCTION で受け取った Cookie での CONCLUSION は成功する
+    feed_conclusion_with_cookie(&mut listener, 0x1111, first, ts(2_000))
+        .expect("再送前後の Cookie を載せた CONCLUSION は受け入れられる想定");
+    assert_eq!(
+        listener.state(),
+        ConnectionState::Connected,
+        "CONCLUSION 後に接続が確立していない"
+    );
+}
+
+#[test]
+fn test_conclusion_with_zero_cookie_is_rejected() {
+    // 0 は INDUCTION リクエストに必ず載る既知値なので、Listener の Cookie にしてはならないし、
+    // そのまま CONCLUSION に載せても受け入れない。Cookie が 0 のままだと、INDUCTION
+    // レスポンスを読まないピアでも接続確立処理へ進めてしまう。
+    let mut listener = SrtConnection::new_listener(test_options());
+    let cookie = exchange_induction_and_take_cookie(&mut listener, 0x3333, ts(0));
+    assert_ne!(
+        cookie, 0,
+        "比較対象の Cookie が 0 のままではこのテストは意味を持たない"
+    );
+
+    let err = feed_conclusion_with_cookie(&mut listener, 0x3333, 0, ts(10_000))
+        .expect_err("既知値 0 の Cookie を載せた CONCLUSION は拒否される想定");
+    assert_eq!(err.kind, ErrorKind::HandshakeRejected);
+    assert_eq!(err.reason, "invalid SYN cookie");
+    assert_eq!(
+        listener.state(),
+        ConnectionState::Listening,
+        "拒否後に接続が確立している"
+    );
+
+    // 拒否は終端状態ではない。同じ Listener で正しい Cookie を再送すれば接続は確立する。
+    feed_conclusion_with_cookie(&mut listener, 0x3333, cookie, ts(20_000))
+        .expect("拒否後の正しい Cookie での再試行は受け入れられる想定");
+    assert_eq!(
+        listener.state(),
+        ConnectionState::Connected,
+        "拒否の後に再試行が受け入れられていない"
+    );
+}
+
+#[test]
+fn test_syn_cookie_option_is_used_as_is() {
+    // 明示指定 (`Some(v)`) では乱数を生成しない。指定値がそのまま Cookie になり、一致する
+    // CONCLUSION が受理されることを確認する。0 は意図的に指定した場合のみ通る。
+    for value in [0x1234_5678, 0x0000_0000, 0xFFFF_FFFF] {
+        let mut listener = SrtConnection::new_listener(ConnectionOptions {
+            tsbpd_delay: 0,
+            syn_cookie: Some(value),
+            ..Default::default()
+        });
+
+        let cookie = exchange_induction_and_take_cookie(&mut listener, 0x4444, ts(0));
+        assert_eq!(cookie, value, "指定した SYN Cookie が使われていない");
+
+        feed_conclusion_with_cookie(&mut listener, 0x4444, value, ts(10_000))
+            .expect("指定値と一致する CONCLUSION は受け入れられる想定");
+        assert_eq!(
+            listener.state(),
+            ConnectionState::Connected,
+            "指定値での CONCLUSION が受け入れられていない"
+        );
+    }
 }

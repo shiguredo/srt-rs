@@ -2,6 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-05-14
+- Completed: 2026-08-30
 - Model: DeepSeek V4 Pro
 - Branch: feature/fix-syn-cookie-default
 - Polished: 2026-07-31
@@ -60,3 +61,18 @@ draft-sharabayko-srt.md の `#caller-listener-handshake` 節 (「The Induction P
 - 0035 の「SYN Cookie 不一致」のテスト項目が削除されていること
 - `cargo test` で全テストが通過すること
 - CHANGES.md の `## develop` セクションに `[FIX]` エントリが追加されていること
+
+## 解決方法
+
+- `src/srt_connection.rs` の `random_syn_cookie` を追加し、`SrtConnection::new_listener` で `options.syn_cookie.unwrap_or_else(random_syn_cookie)` により接続ごとに 1 回だけ暗号学的乱数を生成する形にした。`handle_handshake_listener` の INDUCTION 受信時だった `self.syn_cookie = self.options.syn_cookie.unwrap_or(0)` は削除した
+- 生成値から 0 を除外した。0 は仕様の INDUCTION リクエストで必ず線路上を流れる既知値であり、当たれば検証が実質無効になるため。再試行には上限 (64 回) を設け、乱数生成器が成功を返しながら 0 しか出さない故障状態で停止が続かないようにした。上限超過と RNG 障害の 2 とおりで panic するため、`new_listener` の `///` に `# パニック` として記載した
+- 公開 doc に限界を明記した。Cookie は接続中は再生成・回転せず (仕様の 1 分精度の時刻ベース回転は未実装)、ピアのアドレスにも紐付かない。INDUCTION と CONCLUSION は同じ `SrtConnection` で処理し、1 つの `SrtConnection` を複数ピアで共有しない
+- Cookie 検証を通過しない CONCLUSION は拒否理由を載せた CONCLUSION レスポンスの送信を MUST としているが、本実装はエラーを返すだけで応答を出さない。この仕様乖離を検証箇所コメントに明記し、別途 issue で追う
+- `tests/test_srt_connection.rs` に「SYN Cookie テスト」章を新設し、ヘルパー `exchange_induction_and_take_cookie` / `feed_conclusion_with_cookie` を使って 5 本を追加した
+  - `test_syn_cookie_is_random_per_connection`: 未設定時に 0 以外かつ接続ごとに異なる値になること
+  - `test_syn_cookie_uses_full_32_bits`: 8 接続中 1 本以上が上位 16 ビットを持つこと (16 ビットへの縮退検出)
+  - `test_syn_cookie_stable_across_induction_retransmission`: INDUCTION 再送でも Cookie が変わらず、前の Cookie での CONCLUSION が受理されること
+  - `test_conclusion_with_zero_cookie_is_rejected`: 既知値 0 を載せた CONCLUSION を `HandshakeRejected` / "invalid SYN cookie" で拒否し、拒否は終端状態ではないため正しい Cookie の再送で接続が確立すること
+  - `test_syn_cookie_option_is_used_as_is`: `Some(v)` 指定時は乱数を生成せず指定値がそのまま使われること
+- 変異検証で検出力を確認した。旧実装 (`unwrap_or(0)`) に戻すと 1・2・4 本目が失敗し、生成を INDUCTION 時へ移すと 3 本目が、Cookie を `& 0xFFFF` に縮退すると 2 本目が、拒否時に `handshake_state` を `Initial` / `Failed` へ変えると 4 本目が失敗する。新規 5 本は 100 回反復で flake ゼロ
+- 0035 の「SYN Cookie 不一致」テスト項目は develop 時点で既に削除済みであり、移管対応は不要だった
