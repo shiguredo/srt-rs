@@ -64,6 +64,10 @@ srt_caller は getrandom クレート、srt_listener は aws_lc_rs::rand::fill �
 
 ### 18. srt_listener の Cargo.toml に不要な aws-lc-rs 依存 (examples/srt_listener/Cargo.toml)
 
+### 19. ソースコメント中に issue 番号への参照が残っている (src/srt_receiver.rs)
+
+`drop_too_late` 内のコメント `// wrapping_period_active が有効中は MAX_TIMESTAMP + 1 を加算する (0021 の修正を継承)。` が issue 番号を含んでいる。shiguredo-issues 規約「ソースコード本体・コメント・テスト名に issue 番号 / issue への言及を書かないこと」に違反するため、行番号や issue 参照ではなく「なぜ加算するのか」という理由そのものを残す形に書き換える。リポジトリ全体を `grep -rn "(00[0-9][0-9]" src/ tests/ pbt/ examples/ crates/` で横断し、同種箇所が他にもあれば併せて対応する。
+
 ## 設計方針
 
 各項目について、修正するかどうかを判断する。緊急度の低い項目は pending にしてもよい。
