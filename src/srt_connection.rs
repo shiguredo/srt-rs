@@ -141,7 +141,8 @@ pub struct ConnectionOptions {
     pub socket_id: u32,
     /// 初期シーケンス番号
     pub initial_seq: Option<u32>,
-    /// SYN Cookie (Listener 用)
+    /// SYN Cookie (Listener 用)。未設定なら `SrtConnection::new_listener` が暗号学的乱数を
+    /// 生成する。`Some(0)` は INDUCTION リクエストに必ず載る既知値なので避けること。
     pub syn_cookie: Option<u32>,
     /// パスフレーズ (暗号化する場合)
     pub passphrase: Option<String>,
@@ -250,15 +251,26 @@ impl SrtConnection {
     }
 
     /// Listener として新しい接続を作成
+    ///
+    /// `ConnectionOptions::syn_cookie` が未設定の場合は、暗号学的乱数による SYN Cookie を
+    /// この接続用に 1 回だけ生成する。生成した Cookie はこの接続中は再生成・回転せず、
+    /// ピアのアドレスにも紐付かない。INDUCTION と CONCLUSION は同じ `SrtConnection` で
+    /// 処理し、1 つの `SrtConnection` を複数ピアで共有しないこと。
+    ///
+    /// # パニック
+    ///
+    /// aws-lc-rs の乱数生成が失敗した場合、または 0 以外の値が得られるまでの再試行が
+    /// 上限を超えた場合に panic する。
     pub fn new_listener(options: ConnectionOptions) -> Self {
         let initial_seq = options.initial_seq.unwrap_or(0);
+        let syn_cookie = options.syn_cookie.unwrap_or_else(random_syn_cookie);
         Self {
             role: ConnectionRole::Listener,
             state: ConnectionState::Listening,
             handshake_state: HandshakeState::Initial,
             options,
             peer_socket_id: 0,
-            syn_cookie: 0,
+            syn_cookie,
             initial_seq,
             crypto: None,
             sender: None,
@@ -816,9 +828,8 @@ impl SrtConnection {
             HandshakeType::Induction => {
                 // INDUCTION リクエスト受信
                 self.peer_socket_id = hs.socket_id;
-                self.syn_cookie = self.options.syn_cookie.unwrap_or(0);
 
-                // INDUCTION レスポンス送信
+                // INDUCTION レスポンス送信 (Cookie は new_listener で確定済み)
                 self.send_induction_response(now);
                 self.handshake_state = HandshakeState::InductionReceived;
             }
@@ -828,7 +839,11 @@ impl SrtConnection {
                     return Ok(());
                 }
 
-                // Cookie 検証
+                // Cookie 検証。仕様は拒否時に rejection reason を載せた CONCLUSION
+                // レスポンスの送信を MUST としているが、本実装はエラーを返すだけで
+                // 応答パケットを出さない。
+                // 根拠資料: draft-sharabayko-srt.md「The Conclusion Response」。
+                // 節構成・表現は将来変更される可能性がある。
                 if hs.syn_cookie != self.syn_cookie {
                     return Err(Error::handshake_rejected("invalid SYN cookie"));
                 }
@@ -1362,6 +1377,37 @@ impl SrtConnection {
         self.output_queue
             .push_back(ConnectionOutput::SendPacket(buf));
     }
+}
+
+/// SYN Cookie を暗号学的乱数で生成する
+///
+/// 生成は接続 (`SrtConnection`) ごとに 1 回だけ行う。INDUCTION 受信ごとに再生成すると、UDP の
+/// 重複配信で前の Cookie を載せた CONCLUSION が届いたときに検証が失敗する。
+fn random_syn_cookie() -> u32 {
+    // Cookie が既知の固定値だと、INDUCTION レスポンスを受け取っていないピアでも CONCLUSION を
+    // 通せてしまい、検証が実質的に無効になる。仕様は Cookie を「ハンドシェイク処理用のランダム値」
+    // と定義し、INDUCTION フェーズの目的を Listener にリソースを確保させないこととしている。
+    // INDUCTION レスポンス側の説明は host / port / 現在時刻に基づく生成を挙げているが、生成
+    // アルゴリズムは規定していないので、ここでは暗号学的乱数で代替する。
+    // 根拠資料: draft-sharabayko-srt.md「Control Packets」セクション内「Handshake」サブセクション
+    // (SYN Cookie フィールド定義)、「The Induction Phase」および「The Induction Response」。
+    // 節構成・表現は将来変更される可能性がある。
+    //
+    // 0 は INDUCTION リクエストに必ず載る既知値 (同「The Induction Request」の "SYN Cookie: 0"、
+    // `HandshakePacket::new_induction_request` も 0 を送る) なので使わない。再試行に上限を置くのは、
+    // 乱数生成器が成功を返すのに 0 しか出さない故障の状態では、再試行が無限に続くおそれがあるため。
+    const MAX_ATTEMPTS: u32 = 64;
+    let mut bytes = [0u8; 4];
+    for _ in 0..MAX_ATTEMPTS {
+        // 乱数生成の失敗は復旧手段がないため panic で示す (aws-lc-rs の RNG 障害が条件)
+        aws_lc_rs::rand::fill(&mut bytes)
+            .expect("SYN cookie generation failed (aws-lc-rs RNG unavailable)");
+        let cookie = u32::from_le_bytes(bytes);
+        if cookie != 0 {
+            return cookie;
+        }
+    }
+    panic!("SYN cookie generation returned zero {MAX_ATTEMPTS} times in a row (broken RNG)");
 }
 
 /// 損失リストをパース (NAK パケットの control_info から)
