@@ -1,6 +1,7 @@
 # CryptoContext の Debug が機密鍵を漏洩する
 
 - Created: 2026-08-16
+- Completed: 2026-08-29
 - Branch: feature/fix-crypto-context-debug-leaks-secret-keys
 - Polished: 2026-08-29
 
@@ -47,6 +48,7 @@ pub struct CryptoContext {
 
 ## 解決方法
 
-`src/crypto.rs` の `CryptoContext` から `#[derive(Debug)]` の `Debug` を除去し、`impl std::fmt::Debug for CryptoContext` を手動実装する。マスク対象の 3 フィールド (`kek`、`sek_even`、`sek_odd`) は `[REDACTED]` と表示し、残りのフィールドは通常通り出力する。
-
-テストは `tests/test_crypto.rs` に追加し、`CryptoContext` を構築して `Debug` 出力に鍵バイト列が含まれないことを検証する。
+- `src/crypto.rs` の `CryptoContext` から `#[derive(Debug)]` を除去し、`impl std::fmt::Debug for CryptoContext` を手動実装した。マスク対象の 3 フィールド (`kek`、`sek_even`、`sek_odd`) は `[REDACTED]` と表示し、残りのフィールドは通常通り出力する
+- 手動実装は `let Self { kek: _, sek_even: _, sek_odd: _, salt, current_key, key_length, encrypted_packet_count, km_refresh_state, next_key } = self;` の網羅的分割束縛にし、フィールドが追加されたときにマスク要否の検討を強制する形にした。`salt` と `key_length` をマスクしない判断は根拠資料 (draft-sharabayko-srt.md「Encryption」セクション内「Key Material Exchange」および「Encryption Scope」) とともに `//` で `fn fmt` 内へ記した。利用者視点の契約は構造体の `///` に 1 文集約した
+- `tests/test_crypto.rs` に `debug_masks_secret_key_material` (フィールド名付きのマスク検証、マスク個数が 3 であること、鍵バイト列の非含有) と `debug_shows_non_secret_fields` (非マスクフィールドが素で出ること) を追加した
+- `CHANGES.md` の `## develop` セクションに `[FIX]` エントリを追加した
