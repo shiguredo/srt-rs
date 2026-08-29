@@ -108,7 +108,8 @@ pub enum KmRefreshState {
 }
 
 /// 暗号化コンテキスト
-#[derive(Debug)]
+///
+/// `Debug` 出力では鍵素材 (`kek`、`sek_even`、`sek_odd`) が `[REDACTED]` にマスクされる。
 pub struct CryptoContext {
     /// Key Encrypting Key (PBKDF2 で導出)
     kek: Vec<u8>,
@@ -334,6 +335,41 @@ impl CryptoContext {
 
         self.current_key = key_flag;
         Ok(())
+    }
+}
+
+impl std::fmt::Debug for CryptoContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // 網羅的な分割束縛にして、フィールドが追加されたときにマスク要否を強制的に判断させる。
+        // `..` で省略すると新しいフィールドが黙って出力から落ち、マスク要否を検討する機会自体が
+        // 失われるため、意図的に全フィールドを列挙している。
+        let Self {
+            kek: _,
+            sek_even: _,
+            sek_odd: _,
+            salt,
+            current_key,
+            key_length,
+            encrypted_packet_count,
+            km_refresh_state,
+            next_key,
+        } = self;
+        // 根拠資料: draft-sharabayko-srt.md「Encryption」セクション内「Key Material Exchange」
+        // サブセクション (KM メッセージの Salt / KLen フィールド) および同「Encryption Scope」
+        // (SRT はデータパケットのペイロードのみを暗号化しヘッダは平文)。
+        // salt と鍵長は平文でやり取りされる値なのでマスクしない。
+        // 節構成・表現は将来変更される可能性がある。
+        f.debug_struct("CryptoContext")
+            .field("kek", &"[REDACTED]")
+            .field("sek_even", &"[REDACTED]")
+            .field("sek_odd", &"[REDACTED]")
+            .field("salt", salt)
+            .field("current_key", current_key)
+            .field("key_length", key_length)
+            .field("encrypted_packet_count", encrypted_packet_count)
+            .field("km_refresh_state", km_refresh_state)
+            .field("next_key", next_key)
+            .finish()
     }
 }
 
