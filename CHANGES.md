@@ -43,6 +43,8 @@
   - @voluntas
 - [FIX] CryptoContext の Debug 出力で鍵素材がマスクされず漏洩する問題を修正する
   - @voluntas
+- [FIX] Timestamp::add_millis の大きな millis で発生するオーバーフローによるパニックと誤った値の返却を修正する
+  - @voluntas
 
 ### misc
 
