@@ -2,7 +2,11 @@
 //!
 //! SRT ライブラリの C 言語バインディング
 
-#![allow(unsafe_op_in_unsafe_fn)]
+// unsafe fn の境界で契約 (# Safety) を表す方針のため、各操作を個別の unsafe ブロックで囲まない。
+// edition 2024 で既定の警告を crate レベルで抑止しており、将来追加される unsafe 関数の警告も
+// 抑止される。
+// allow でなく expect を使うのは、全操作が囲まれた時点で unfulfilled_lint_expectations に気づくため。
+#![expect(unsafe_op_in_unsafe_fn)]
 
 use std::ffi::{CStr, c_char};
 use std::ptr;
