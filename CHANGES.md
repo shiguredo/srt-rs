@@ -13,6 +13,8 @@
 
 - [CHANGE] デバッグ出力を eprintln! から tracing に移行し ConnectionOptions::debug を削除する
   - @voluntas
+- [FIX] check_km_refresh が KeyRefreshNeeded イベントを重複発行する問題を修正する
+  - @voluntas
 - [FIX] 受信バッファがシーケンス番号ラップアラウンド境界でパケットを誤った順序で配送する問題を修正する
   - @voluntas
 - [FIX] AES-CTR のカウンタブロック構築を SRT 仕様に準拠するよう修正する

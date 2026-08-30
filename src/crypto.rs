@@ -338,6 +338,19 @@ impl CryptoContext {
     }
 }
 
+/// テスト用に KM リフレッシュの内部状態を操作するヘルパー
+///
+/// KM リフレッシュの閾値は 2^25 パケットであり、公開 API 経由では到達できないため、
+/// 単体テストで閾値付近の状態を作るためにのみ使用する。
+/// 通常のビルド (`cargo build` / `cargo test` の結合テスト) には含まれない。
+#[cfg(test)]
+impl CryptoContext {
+    /// 暗号化済みパケット数を設定する
+    pub(crate) fn set_encrypted_packet_count_for_test(&mut self, count: u64) {
+        self.encrypted_packet_count = count;
+    }
+}
+
 impl std::fmt::Debug for CryptoContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // 網羅的な分割束縛にして、フィールドが追加されたときにマスク要否を強制的に判断させる。
