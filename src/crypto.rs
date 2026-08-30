@@ -133,7 +133,8 @@ pub struct CryptoContext {
 
 impl CryptoContext {
     // 根拠資料: draft-sharabayko-srt.md「Encryption」セクション内「KM Refresh」サブセクション。
-    // 2^25 パケット / 4000 パケットはいずれも仕様の推奨値であり、将来変更される可能性がある。
+    // 2^25 パケット / 4000 パケットはいずれも仕様の推奨値。
+    // 節構成・表現は将来変更される可能性がある。
     /// KM リフレッシュ期間 (2^25 パケット)
     pub const KM_REFRESH_PERIOD: u64 = 1 << 25;
 
