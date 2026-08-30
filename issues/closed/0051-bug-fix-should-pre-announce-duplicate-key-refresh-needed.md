@@ -1,6 +1,7 @@
 # check_km_refresh が KeyRefreshNeeded イベントを重複発行する
 
 - Created: 2026-08-16
+- Completed: 2026-08-30
 - Branch: feature/fix-should-pre-announce-duplicate-key-refresh-needed
 - Polished: 2026-08-16
 
@@ -43,10 +44,11 @@ if crypto.should_pre_announce() {
 
 ## 解決方法
 
-`src/srt_connection.rs` の `SrtConnection` 構造体に `key_refresh_event_sent: bool` フィールド（初期値 `false`）を追加し、`check_km_refresh` 内の `KeyRefreshNeeded` 発行条件に `!self.key_refresh_event_sent` を追加する。イベント発行時に `self.key_refresh_event_sent = true` を設定し、`decommission_old_key()` の呼び出し後に `self.key_refresh_event_sent = false` でリセットする。
-
-テストは `src/srt_connection.rs` 内の `#[cfg(test)]` モジュールに追加する。`encrypted_packet_count` は `CryptoContext` の private フィールドであり、公開 API 経由では `KM_REFRESH_PERIOD - KM_PRE_ANNOUNCE_PERIOD` (約 3355 万パケット) まで `send()` を呼ぶ必要があるため、`tests/` からは実現できない。`#[cfg(test)]` モジュールであれば private フィールドにアクセスして閾値付近の状態を作れる。検証シナリオは次の 3 つ。
-
-- `send()` を複数回呼んでも `KeyRefreshNeeded` が 1 回しか発行されないこと
-- `poll_event()` でイベントを消費後、`provide_new_sek()` を呼ぶ前に `send()` を呼んでも再発行されないこと
-- 1 サイクル完了 (`decommission_old_key` 相当の状態遷移) 後に再度 `KeyRefreshNeeded` が発行されること
+- `src/srt_connection.rs` の `SrtConnection` に `key_refresh_event_sent: bool` フィールド (初期値 `false`) を追加し、`check_km_refresh` 内の `KeyRefreshNeeded` 発行条件に `!self.key_refresh_event_sent` を追加した。イベント発行時に `self.key_refresh_event_sent = true` を設定し、`decommission_old_key()` の呼び出し後に `self.key_refresh_event_sent = false` でリセットする
+- フラグは `poll_event()` でのイベント消費状況には依存させない。イベント消費後に `provide_new_sek()` を呼ぶ前に `send()` されても再発行されない
+- ハンドシェイクで `CryptoContext` を再生成したとき (Caller の INDUCTION レスポンス受信時、Listener の CONCLUSION リクエスト受信時) もフラグを初期化する。同一インスタンスで再接続した場合に古いフラグが残ると、次のキーリフレッシュが永久に開始できなくなるため
+- テストは `src/srt_connection.rs` 内の `#[cfg(test)]` モジュールに追加した。`encrypted_packet_count` は `CryptoContext` の private フィールドであり、Rust の privacy 上 `srt_connection.rs` のテストモジュールからは直接設定できないため、`src/crypto.rs` に `#[cfg(test)]` 専用の `set_encrypted_packet_count_for_test()` を追加して閾値付近の状態を作れるようにした (通常のビルドには含まれない)。テストは接続済み状態の `SrtConnection` と `CryptoContext` を実オブジェクトのまま直接構築し、検証シナリオは次の 3 つ
+  - `test_key_refresh_needed_emitted_once`: `send()` を複数回呼んでも `KeyRefreshNeeded` が 1 回しか発行されないこと
+  - `test_key_refresh_needed_not_reemitted_after_poll`: `poll_event()` でイベントを消費後、`provide_new_sek()` を呼ぶ前に `send()` を呼んでも再発行されないこと
+  - `test_key_refresh_needed_reemitted_next_cycle`: 1 サイクル完了 (`decommission_old_key`) 後に再度 `KeyRefreshNeeded` が発行されること
+- `CHANGES.md` の `## develop` セクションに `[FIX]` エントリを追加した

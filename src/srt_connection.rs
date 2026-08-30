@@ -65,6 +65,15 @@ pub enum TimerId {
 /// SRT 仕様では通常 5 秒
 const INACTIVITY_TIMEOUT_MICROS: u64 = 5_000_000;
 
+/// UserDefined 制御パケットの Subtype で KM Refresh の要求 / 応答を示す値
+///
+/// 根拠資料: draft-sharabayko-srt.md「Control Packets」セクション内「Handshake」
+/// サブセクションの Handshake Extension Type values テーブル
+/// (SRT_CMD_KMREQ = 3、SRT_CMD_KMRSP = 4)。
+/// 節構成・表現は将来変更される可能性がある。
+const SRT_CMD_KMREQ: u16 = 3;
+const SRT_CMD_KMRSP: u16 = 4;
+
 /// libsrt 互換ゼロパディング (4 バイト)
 ///
 /// # 背景
@@ -199,6 +208,12 @@ pub struct SrtConnection {
     /// 暗号化コンテキスト
     crypto: Option<CryptoContext>,
 
+    /// `KeyRefreshNeeded` イベントの発行済みフラグ
+    ///
+    /// 重複発行を防ぐ理由とリセットのタイミングは [`Self::check_km_refresh`] の
+    /// 実装コメントを参照すること。
+    key_refresh_event_sent: bool,
+
     /// 送信バッファ
     sender: Option<SenderBuffer>,
     /// 受信バッファ
@@ -237,6 +252,7 @@ impl SrtConnection {
             syn_cookie: 0,
             initial_seq,
             crypto: None,
+            key_refresh_event_sent: false,
             sender: None,
             receiver: None,
             event_queue: VecDeque::new(),
@@ -273,6 +289,7 @@ impl SrtConnection {
             syn_cookie,
             initial_seq,
             crypto: None,
+            key_refresh_event_sent: false,
             sender: None,
             receiver: None,
             event_queue: VecDeque::new(),
@@ -585,6 +602,8 @@ impl SrtConnection {
     /// 新しい SEK を提供してキーリフレッシュを開始
     ///
     /// `KeyRefreshNeeded` イベントを受信した後に呼び出す。
+    /// イベントは 1 サイクルに 1 回しか発行されないため、このメソッドがエラーを返した
+    /// 場合もイベントは再発行されない。利用者はエラーを処理して再度呼び出すこと。
     pub fn provide_new_sek(&mut self, new_sek: &[u8], now: Timestamp) -> Result<(), Error> {
         let Some(ref mut crypto) = self.crypto else {
             return Err(Error::with_reason(
@@ -745,6 +764,10 @@ impl SrtConnection {
                     self.crypto = Some(CryptoContext::new_sender(
                         passphrase, key_length, salt, sek,
                     )?);
+                    // 新しい暗号化コンテキストはイベント未発行の状態から始まるため、
+                    // 発行済みフラグも初期化する (同一インスタンスでの再接続時に
+                    // 古いフラグが残ると次のキーリフレッシュが永久に開始できなくなる)
+                    self.key_refresh_event_sent = false;
                 }
 
                 // CONCLUSION を送信
@@ -869,6 +892,10 @@ impl SrtConnection {
                             km.key_length,
                         )?);
                         self.received_km = Some(km);
+                        // 新しい暗号化コンテキストはイベント未発行の状態から始まるため、
+                        // 発行済みフラグも初期化する (同一インスタンスでの再接続時に
+                        // 古いフラグが残ると次のキーリフレッシュが永久に開始できなくなる)
+                        self.key_refresh_event_sent = false;
                     } else {
                         // 暗号化が要求されているが KMREQ がない
                         return Err(Error::handshake_rejected(
@@ -981,10 +1008,6 @@ impl SrtConnection {
     /// UserDefined パケットを処理 (KM Refresh)
     fn handle_user_defined(&mut self, pkt: ControlPacket, now: Timestamp) -> Result<(), Error> {
         // Subtype で KMREQ/KMRSP を判別
-        // SRT_CMD_KMREQ = 3, SRT_CMD_KMRSP = 4
-        const SRT_CMD_KMREQ: u16 = 3;
-        const SRT_CMD_KMRSP: u16 = 4;
-
         match pkt.subtype {
             SRT_CMD_KMREQ => {
                 // KM Refresh リクエストを受信 (受信側)
@@ -1018,8 +1041,12 @@ impl SrtConnection {
             return;
         };
 
-        if crypto.should_pre_announce() {
+        // should_pre_announce は Idle 状態の間 true を返し続けるため、発行済みフラグで
+        // 重複発行を防ぐ。イベントを poll_event で消費済みかどうかには依存させず、
+        // 1 サイクル完了までフラグを維持する。
+        if crypto.should_pre_announce() && !self.key_refresh_event_sent {
             // 外部に新しい SEK が必要なことを通知
+            self.key_refresh_event_sent = true;
             self.event_queue
                 .push_back(ConnectionEvent::KeyRefreshNeeded {
                     key_length: crypto.key_length().len(),
@@ -1035,14 +1062,14 @@ impl SrtConnection {
             // 古い鍵の廃棄が必要かチェック
             if crypto.should_decommission_old_key() {
                 crypto.decommission_old_key();
+                // 1 サイクル完了でフラグをリセットし、次のサイクルで再度発行できるようにする
+                self.key_refresh_event_sent = false;
             }
         }
     }
 
     /// KMREQ パケットを送信 (KM Refresh)
     fn send_km_request(&mut self, km_message: &KmMessage, now: Timestamp) {
-        const SRT_CMD_KMREQ: u16 = 3;
-
         let pkt = ControlPacket {
             control_type: ControlType::UserDefined,
             subtype: SRT_CMD_KMREQ,
@@ -1060,8 +1087,6 @@ impl SrtConnection {
 
     /// KMRSP パケットを送信 (KM Refresh)
     fn send_km_response(&mut self, km_message: &KmMessage, now: Timestamp) {
-        const SRT_CMD_KMRSP: u16 = 4;
-
         let pkt = ControlPacket {
             control_type: ControlType::UserDefined,
             subtype: SRT_CMD_KMRSP,
@@ -1495,6 +1520,7 @@ fn encode_loss_list(loss_list: &[u32]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crypto::KmRefreshState;
 
     #[test]
     fn test_connection_options_default() {
@@ -1556,5 +1582,176 @@ mod tests {
         let loss_list: Vec<u32> = vec![];
         let encoded = encode_loss_list(&loss_list);
         assert!(encoded.is_empty());
+    }
+
+    /// 暗号化有効で接続済み状態の接続を直接構築する
+    ///
+    /// KM リフレッシュの閾値 (2^25 - 4000 パケット) は公開 API 経由では到達できないため、
+    /// ハンドシェイクを省略し `send()` が動作する最低限の接続済み状態を直接設定する。
+    /// `encrypted_packet_count` は `CryptoContext::set_encrypted_packet_count_for_test`
+    /// でテストごとに設定する。
+    fn new_crypto_connected_connection() -> SrtConnection {
+        let mut conn = SrtConnection::new_caller(ConnectionOptions {
+            socket_id: 0x1000,
+            key_length: KeyLength::Aes128,
+            ..ConnectionOptions::default()
+        });
+
+        conn.state = ConnectionState::Connected;
+        conn.start_time = Some(Timestamp::from_micros(0));
+        conn.peer_socket_id = 0x2000;
+        conn.sender = Some(SenderBuffer::new(
+            conn.initial_seq,
+            DEFAULT_FLOW_WINDOW,
+            conn.options.tsbpd_delay,
+        ));
+
+        let salt = [0u8; 16];
+        let sek = vec![0x42u8; 16];
+        let crypto = CryptoContext::new_sender("passphrase", KeyLength::Aes128, salt, &sek)
+            .expect("Sender コンテキストの生成は成功する想定");
+        conn.crypto = Some(crypto);
+
+        conn
+    }
+
+    /// イベントキューから `KeyRefreshNeeded` の発行数を数える
+    fn drain_key_refresh_events(conn: &mut SrtConnection) -> usize {
+        let mut count = 0;
+        while let Some(event) = conn.poll_event() {
+            if matches!(event, ConnectionEvent::KeyRefreshNeeded { .. }) {
+                count += 1;
+            }
+        }
+        count
+    }
+
+    /// `encrypted_packet_count` を指定した値に設定する
+    fn set_encrypted_packet_count(conn: &mut SrtConnection, count: u64) {
+        conn.crypto
+            .as_mut()
+            .expect("暗号化コンテキストは設定済みの想定")
+            .set_encrypted_packet_count_for_test(count);
+    }
+
+    /// `encrypted_packet_count` を KM 事前通知の閾値
+    /// (`KM_REFRESH_PERIOD - KM_PRE_ANNOUNCE_PERIOD`) に設定する
+    fn set_count_to_pre_announce_threshold(conn: &mut SrtConnection) {
+        set_encrypted_packet_count(
+            conn,
+            CryptoContext::KM_REFRESH_PERIOD - CryptoContext::KM_PRE_ANNOUNCE_PERIOD,
+        );
+    }
+
+    /// 現在の KM リフレッシュ状態を取得する
+    fn current_km_refresh_state(conn: &SrtConnection) -> KmRefreshState {
+        conn.crypto
+            .as_ref()
+            .expect("暗号化コンテキストは設定済みの想定")
+            .km_refresh_state()
+    }
+
+    /// 出力キューから KMREQ のパケット数を数える
+    fn count_kmreq_outputs(conn: &mut SrtConnection) -> usize {
+        let mut count = 0;
+        while let Some(output) = conn.poll_output() {
+            let ConnectionOutput::SendPacket(buf) = output else {
+                continue;
+            };
+            // 出力キューのパケットは encode 済みのはずのため、デコードできない場合は
+            // 被験コードのバグとしてテストを失敗させる
+            let SrtPacket::Control(pkt) = SrtPacket::decode(&buf)
+                .expect("出力キューのパケットは SRT パケットとしてデコードできる想定")
+            else {
+                continue;
+            };
+            if pkt.subtype == SRT_CMD_KMREQ {
+                count += 1;
+            }
+        }
+        count
+    }
+
+    #[test]
+    fn test_key_refresh_needed_emitted_once() {
+        let mut conn = new_crypto_connected_connection();
+        set_count_to_pre_announce_threshold(&mut conn);
+
+        // should_pre_announce は Idle 状態の間 true を返し続けるため、発行済みフラグが
+        // ないと send のたびにイベントが重複発行される。poll せずに send を続けても
+        // イベントが 1 件しか蓄積しないことを検証する
+        for i in 0..10 {
+            conn.send(b"payload", Timestamp::from_micros(1000 + i * 1000))
+                .expect("接続済みの send は成功する想定");
+        }
+        let event = conn
+            .poll_event()
+            .expect("閾値到達後の send でイベントが発行される想定");
+        assert_eq!(event, ConnectionEvent::KeyRefreshNeeded { key_length: 16 });
+        assert_eq!(drain_key_refresh_events(&mut conn), 0);
+    }
+
+    #[test]
+    fn test_key_refresh_needed_not_reemitted_after_poll() {
+        let mut conn = new_crypto_connected_connection();
+        set_count_to_pre_announce_threshold(&mut conn);
+
+        // イベントを発行して消費する
+        conn.send(b"payload", Timestamp::from_micros(1000))
+            .expect("接続済みの send は成功する想定");
+        let event = conn
+            .poll_event()
+            .expect("閾値到達後の send でイベントが発行される想定");
+        assert!(matches!(event, ConnectionEvent::KeyRefreshNeeded { .. }));
+
+        // 消費後、provide_new_sek を呼ぶ前に send しても再発行されないこと
+        // (イベント消費の有無にフラグが依存すると、利用者が poll_event と
+        // provide_new_sek の間で send しただけで重複発行が再現する)
+        conn.send(b"payload", Timestamp::from_micros(2000))
+            .expect("接続済みの send は成功する想定");
+        assert_eq!(drain_key_refresh_events(&mut conn), 0);
+    }
+
+    #[test]
+    fn test_key_refresh_needed_reemitted_next_cycle() {
+        let mut conn = new_crypto_connected_connection();
+
+        // 1 サイクル目: 閾値到達でイベントを発行する
+        set_count_to_pre_announce_threshold(&mut conn);
+        conn.send(b"payload", Timestamp::from_micros(1000))
+            .expect("接続済みの send は成功する想定");
+        assert_eq!(drain_key_refresh_events(&mut conn), 1);
+
+        // 新しい SEK を提供して事前通知を開始する
+        let new_sek = vec![0x43u8; 16];
+        conn.provide_new_sek(&new_sek, Timestamp::from_micros(2000))
+            .expect("事前通知の開始は成功する想定");
+        assert_eq!(current_km_refresh_state(&conn), KmRefreshState::PreAnnounce);
+
+        // イベント 1 回に対して KMREQ は 1 回だけ送出されること
+        assert_eq!(count_kmreq_outputs(&mut conn), 1);
+
+        // 2^25 パケット到達で鍵を切り替える (switch_key 内でカウントが 0 に戻る)
+        set_encrypted_packet_count(&mut conn, CryptoContext::KM_REFRESH_PERIOD);
+        conn.send(b"payload", Timestamp::from_micros(3000))
+            .expect("接続済みの send は成功する想定");
+        assert_eq!(
+            current_km_refresh_state(&conn),
+            KmRefreshState::PostAnnounce
+        );
+
+        // switch_key でカウントが 0 にリセットされているため、4000 を設定すると
+        // 2^25 + 4000 パケット相当となり、古い鍵が廃棄されて 1 サイクル完了 (Idle に戻る)
+        set_encrypted_packet_count(&mut conn, CryptoContext::KM_PRE_ANNOUNCE_PERIOD);
+        conn.send(b"payload", Timestamp::from_micros(4000))
+            .expect("接続済みの send は成功する想定");
+        assert_eq!(current_km_refresh_state(&conn), KmRefreshState::Idle);
+
+        // 1 サイクル完了後はフラグがリセットされているため、
+        // 次のサイクルの閾値到達で再度イベントが発行されること
+        set_count_to_pre_announce_threshold(&mut conn);
+        conn.send(b"payload", Timestamp::from_micros(5000))
+            .expect("接続済みの send は成功する想定");
+        assert_eq!(drain_key_refresh_events(&mut conn), 1);
     }
 }
