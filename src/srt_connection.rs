@@ -199,11 +199,10 @@ pub struct SrtConnection {
     /// 暗号化コンテキスト
     crypto: Option<CryptoContext>,
 
-    /// `KeyRefreshNeeded` イベントを発行済みか
+    /// `KeyRefreshNeeded` イベントの発行済みフラグ
     ///
-    /// `should_pre_announce` は `Idle` 状態の間 true を返し続けるため、イベントの
-    /// 重複発行を防ぐフラグ。イベントの消費状況には依存させず、キーリフレッシュの
-    /// 1 サイクル完了 (`decommission_old_key`) 時にリセットする。
+    /// 重複発行を防ぐ理由とリセットのタイミングは `check_km_refresh` の実装コメントを
+    /// 参照すること。
     key_refresh_event_sent: bool,
 
     /// 送信バッファ
@@ -1617,14 +1616,44 @@ mod tests {
         count
     }
 
-    /// `encrypted_packet_count` を KM 事前通知の閾値 (2^25 - 4000) に設定する
-    fn set_count_to_pre_announce_threshold(conn: &mut SrtConnection) {
+    /// `encrypted_packet_count` を指定した値に設定する
+    fn set_encrypted_packet_count(conn: &mut SrtConnection, count: u64) {
         conn.crypto
             .as_mut()
             .expect("暗号化コンテキストは設定済みの想定")
-            .set_encrypted_packet_count_for_test(
-                CryptoContext::KM_REFRESH_PERIOD - CryptoContext::KM_PRE_ANNOUNCE_PERIOD,
-            );
+            .set_encrypted_packet_count_for_test(count);
+    }
+
+    /// `encrypted_packet_count` を KM 事前通知の閾値 (2^25 - 4000) に設定する
+    fn set_count_to_pre_announce_threshold(conn: &mut SrtConnection) {
+        set_encrypted_packet_count(
+            conn,
+            CryptoContext::KM_REFRESH_PERIOD - CryptoContext::KM_PRE_ANNOUNCE_PERIOD,
+        );
+    }
+
+    /// 現在の KM リフレッシュ状態を取得する
+    fn km_refresh_state_of(conn: &SrtConnection) -> KmRefreshState {
+        conn.crypto
+            .as_ref()
+            .expect("暗号化コンテキストは設定済みの想定")
+            .km_refresh_state()
+    }
+
+    /// 出力キューから KMREQ (UserDefined の subtype 3) のパケット数を数える
+    fn count_kmreq_outputs(conn: &mut SrtConnection) -> usize {
+        const SRT_CMD_KMREQ: u16 = 3;
+
+        let mut count = 0;
+        while let Some(output) = conn.poll_output() {
+            if let ConnectionOutput::SendPacket(buf) = output
+                && let Ok(SrtPacket::Control(pkt)) = SrtPacket::decode(&buf)
+                && pkt.subtype == SRT_CMD_KMREQ
+            {
+                count += 1;
+            }
+        }
+        count
     }
 
     #[test]
@@ -1632,21 +1661,17 @@ mod tests {
         let mut conn = new_crypto_connected_connection();
         set_count_to_pre_announce_threshold(&mut conn);
 
-        // 閾値到達後の最初の send でイベントが 1 件発行される
-        conn.send(b"payload", Timestamp::from_micros(1000))
-            .expect("接続済みの send は成功する想定");
+        // should_pre_announce が true を返し続ける間も send を繰り返すと、旧実装では
+        // そのたびにイベントが重複発行されて KMREQ が複数回送信される。poll せずに
+        // send を続けてもイベントが 1 件しか蓄積しないことを直接検証する
+        for i in 0..10 {
+            conn.send(b"payload", Timestamp::from_micros(1000 + i * 1000))
+                .expect("接続済みの send は成功する想定");
+        }
         let event = conn
             .poll_event()
             .expect("閾値到達後の send でイベントが発行される想定");
         assert_eq!(event, ConnectionEvent::KeyRefreshNeeded { key_length: 16 });
-
-        // should_pre_announce が true を返し続ける間も send を繰り返すと
-        // 重複したイベントが発行されて KMREQ が複数回送信されるため、
-        // 1 サイクル目では 1 回しか発行されないこと
-        for _ in 0..10 {
-            conn.send(b"payload", Timestamp::from_micros(2000))
-                .expect("接続済みの send は成功する想定");
-        }
         assert_eq!(drain_key_refresh_events(&mut conn), 0);
     }
 
@@ -1674,7 +1699,6 @@ mod tests {
     #[test]
     fn test_key_refresh_needed_reemitted_next_cycle() {
         let mut conn = new_crypto_connected_connection();
-        let threshold = CryptoContext::KM_REFRESH_PERIOD - CryptoContext::KM_PRE_ANNOUNCE_PERIOD;
 
         // 1 サイクル目: 閾値到達でイベントを発行する
         set_count_to_pre_announce_threshold(&mut conn);
@@ -1686,50 +1710,27 @@ mod tests {
         let new_sek = vec![0x43u8; 16];
         conn.provide_new_sek(&new_sek, Timestamp::from_micros(2000))
             .expect("事前通知の開始は成功する想定");
-        assert_eq!(
-            conn.crypto
-                .as_ref()
-                .expect("暗号化コンテキストは設定済みの想定")
-                .km_refresh_state(),
-            KmRefreshState::PreAnnounce
-        );
+        assert_eq!(km_refresh_state_of(&conn), KmRefreshState::PreAnnounce);
 
-        // 2^25 パケット到達で鍵を切り替える
-        conn.crypto
-            .as_mut()
-            .expect("暗号化コンテキストは設定済みの想定")
-            .set_encrypted_packet_count_for_test(CryptoContext::KM_REFRESH_PERIOD);
+        // イベント 1 回に対して KMREQ は 1 回だけ送出されること
+        assert_eq!(count_kmreq_outputs(&mut conn), 1);
+
+        // 2^25 パケット到達で鍵を切り替える (switch_key 内でカウントが 0 に戻る)
+        set_encrypted_packet_count(&mut conn, CryptoContext::KM_REFRESH_PERIOD);
         conn.send(b"payload", Timestamp::from_micros(3000))
             .expect("接続済みの send は成功する想定");
-        assert_eq!(
-            conn.crypto
-                .as_ref()
-                .expect("暗号化コンテキストは設定済みの想定")
-                .km_refresh_state(),
-            KmRefreshState::PostAnnounce
-        );
+        assert_eq!(km_refresh_state_of(&conn), KmRefreshState::PostAnnounce);
 
-        // +4000 パケット到達で古い鍵を廃棄し、1 サイクル完了 (Idle に戻る)
-        conn.crypto
-            .as_mut()
-            .expect("暗号化コンテキストは設定済みの想定")
-            .set_encrypted_packet_count_for_test(CryptoContext::KM_PRE_ANNOUNCE_PERIOD);
+        // switch_key でカウントが 0 にリセットされているため、4000 を設定すると
+        // 2^25 + 4000 パケット相当となり、古い鍵が廃棄されて 1 サイクル完了 (Idle に戻る)
+        set_encrypted_packet_count(&mut conn, CryptoContext::KM_PRE_ANNOUNCE_PERIOD);
         conn.send(b"payload", Timestamp::from_micros(4000))
             .expect("接続済みの send は成功する想定");
-        assert_eq!(
-            conn.crypto
-                .as_ref()
-                .expect("暗号化コンテキストは設定済みの想定")
-                .km_refresh_state(),
-            KmRefreshState::Idle
-        );
+        assert_eq!(km_refresh_state_of(&conn), KmRefreshState::Idle);
 
         // 1 サイクル完了後はフラグがリセットされているため、
         // 次のサイクルの閾値到達で再度イベントが発行されること
-        conn.crypto
-            .as_mut()
-            .expect("暗号化コンテキストは設定済みの想定")
-            .set_encrypted_packet_count_for_test(threshold);
+        set_count_to_pre_announce_threshold(&mut conn);
         conn.send(b"payload", Timestamp::from_micros(5000))
             .expect("接続済みの send は成功する想定");
         assert_eq!(drain_key_refresh_events(&mut conn), 1);

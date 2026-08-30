@@ -132,6 +132,8 @@ pub struct CryptoContext {
 }
 
 impl CryptoContext {
+    // 根拠資料: draft-sharabayko-srt.md「Encryption」セクション内「KM Refresh」サブセクション。
+    // 2^25 パケット / 4000 パケットはいずれも仕様の推奨値であり、将来変更される可能性がある。
     /// KM リフレッシュ期間 (2^25 パケット)
     pub const KM_REFRESH_PERIOD: u64 = 1 << 25;
 
@@ -338,11 +340,11 @@ impl CryptoContext {
     }
 }
 
-/// テスト用に KM リフレッシュの内部状態を操作するヘルパー
+/// テスト用に暗号化済みパケット数を設定するヘルパー
 ///
-/// KM リフレッシュの閾値は 2^25 パケットであり、公開 API 経由では到達できないため、
-/// 単体テストで閾値付近の状態を作るためにのみ使用する。
-/// 通常のビルド (`cargo build` / `cargo test` の結合テスト) には含まれない。
+/// KM 事前通知の閾値は `KM_REFRESH_PERIOD - KM_PRE_ANNOUNCE_PERIOD` (2^25 - 4000 パケット)
+/// であり、公開 API 経由では到達できないため、単体テストで閾値付近の状態を作るためにのみ
+/// 使用する。通常のビルド (`cargo build` / `cargo test` の結合テスト) には含まれない。
 #[cfg(test)]
 impl CryptoContext {
     /// 暗号化済みパケット数を設定する
