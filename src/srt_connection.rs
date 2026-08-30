@@ -1678,7 +1678,7 @@ mod tests {
         set_count_to_pre_announce_threshold(&mut conn);
 
         // should_pre_announce は Idle 状態の間 true を返し続けるため、発行済みフラグが
-        // 無いと send のたびにイベントが重複発行される。poll せずに send を続けても
+        // ないと send のたびにイベントが重複発行される。poll せずに send を続けても
         // イベントが 1 件しか蓄積しないことを検証する
         for i in 0..10 {
             conn.send(b"payload", Timestamp::from_micros(1000 + i * 1000))
