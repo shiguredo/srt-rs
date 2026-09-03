@@ -1,6 +1,7 @@
 # 受信バッファのパケット蓄積に上限チェックがない
 
 - Created: 2026-08-16
+- Completed: 2026-09-03
 - Branch: feature/fix-receiver-buffer-no-limit
 - Polished: 2026-08-16
 
@@ -42,5 +43,13 @@ packets: BTreeMap<u32, ReceivedPacket>,
 `src/srt_receiver.rs` の `receive` メソッド内のパケット挿入箇所で、`self.packets.len() >= self.max_buffer_size` の場合に `return` する (パケットを破棄する)。破棄時は `loss_list` への追加も行わない。
 
 テストは `src/srt_receiver.rs` 内の `#[cfg(test)]` モジュールに追加し、`max_buffer_size` フィールドに小さい値を直接設定して、超過分のパケットが破棄されることを検証する。
+
+## 解決方法
+
+`src/srt_receiver.rs` の `receive` メソッド内のパケット挿入直前に、`packets.len() >= max_buffer_size` の場合に `None` を返して破棄する上限チェックを追加した。破棄時は `loss_list` にも登録せず、`expected_seq` は進めない。`packets.len()` が `max_buffer_size` を超えなくなったため、`generate_ack` 内の `available_buffer` 計算の u32 アンダーフローも発生しない。`receive` の `///` に満杯時の破棄契約を追記した。
+
+`src/srt_receiver.rs` 内の `#[cfg(test)]` モジュールに単体テスト 2 件を追加した。上限到達時の破棄・非挿入・非登録とドレイン後の受け入れ回復、満杯時の `available_buffer == 0` (アンダーフローなし) を検証する。
+
+`CHANGES.md` の `## develop` セクションに `[FIX]` エントリを追加した。
 
 なお、`src/srt_sender.rs` の `max_buffer_size` は 0040 と 0067 (デッドコード削除) で削除が提案されており、本 issue では触れない。また、0028 (receive の分割)、0055 (loss_list の HashSet 化)、0073 (find_deliverable_seq の最適化)、0074 (損失検出ループの反復回数上限) は同じ `ReceiverBuffer` の `receive` メソッドを変更するため、並行実装時は直列に実装する (先後は問わない)。
