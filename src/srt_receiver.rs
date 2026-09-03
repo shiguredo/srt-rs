@@ -396,7 +396,12 @@ impl ReceiverBuffer {
 
     /// パケットを受信
     ///
-    /// 損失が検出された場合、損失リストを返す
+    /// 今回検出した損失がある場合、損失リストを返す
+    ///
+    /// `expected_seq` からのギャップが受信バッファの収容上限を超える場合、
+    /// 当該パケットを破棄し、新規に追跡した欠損 (上限で打ち切られた範囲まで)
+    /// を返す (`expected_seq` は進めない)。追加が抑止された場合は `None` を
+    /// 返すことがある。破棄した場合も受信統計 (`total_received` 等) には計上される
     pub fn receive(&mut self, packet: DataPacket, now: Timestamp) -> Option<Vec<u32>> {
         let seq = packet.sequence_number;
 
@@ -471,19 +476,45 @@ impl ReceiverBuffer {
             },
         );
 
-        // 損失検出
+        // 損失検出 (上限付き)
+        //
+        // 遠方の seq を持つ 1 パケットで約 2^30 件の損失登録が走り、メモリ枯渇を
+        // 引き起こすことを防ぐため、反復回数と登録件数に上限を設ける。
+        // 上限には受信バッファの収容上限 (max_buffer_size) を流用する。
+        // 追跡する損失は将来 packets に収容される欠損であり、収容上限を
+        // 超える追跡は不要なためである。
         let mut new_losses = Vec::new();
+        let mut gap_exceeded = false;
         if sequence_greater_than(seq, self.expected_seq) {
             // ギャップがある = 損失の可能性
             let mut s = self.expected_seq;
+            let mut iterations: u32 = 0;
             while sequence_less_than(s, seq) {
+                // 反復回数上限に達したら打ち切る (二重の防御の第一層)
+                if iterations >= self.max_buffer_size {
+                    gap_exceeded = true;
+                    break;
+                }
+                iterations += 1;
                 if !self.packets.contains_key(&s) && !self.loss_list.contains(&s) {
-                    new_losses.push(s);
-                    self.loss_list.push(s);
-                    self.total_lost += 1;
+                    // 登録件数上限に達したら追加しない (二重の防御の第二層)
+                    // 上限で抑止した分は total_lost に計上しない
+                    if (self.loss_list.len() as u32) < self.max_buffer_size {
+                        new_losses.push(s);
+                        self.loss_list.push(s);
+                        self.total_lost += 1;
+                    }
                 }
                 s = s.wrapping_add(1) & 0x7FFF_FFFF;
             }
+        }
+
+        // 上限超過のギャップを検出した場合、当該パケットを破棄する
+        // (packets に残さない)。未登録のまま受け入れると find_deliverable_seq
+        // のギャップ判定が欠損を飛ばした配送と判定しうるためである。
+        // 登録済みの欠損は残し、後続パケットで NAK 回復する。
+        if gap_exceeded {
+            self.packets.remove(&seq);
         }
 
         // expected_seq を更新
@@ -819,6 +850,122 @@ mod tests {
         assert!(losses.is_some());
         let lost = losses.expect("欠落パケットは Some になる想定");
         assert_eq!(lost, vec![1001]);
+    }
+
+    #[test]
+    fn test_receive_discards_packet_with_excessive_gap() {
+        // 上限を超えるギャップを持つパケットは破棄され、肥大化しないこと
+        let start = Timestamp::from_micros(0);
+        let mut buf = ReceiverBuffer::new(1000, 120, start, 0);
+        buf.set_tsbpd_enabled(false);
+        buf.max_buffer_size = 8;
+
+        let now = Timestamp::from_micros(1000);
+
+        // expected_seq から 2^30 - 1 離れた seq を持つ 1 パケットを受信する
+        let far_seq = 1000 + 0x3FFF_FFFF;
+        let losses = buf.receive(make_packet(far_seq, 100), now);
+
+        // 上限まで追跡して打ち切られること
+        let lost = losses.expect("上限までの欠損は追跡される想定");
+        assert_eq!(lost.len(), 8);
+        assert_eq!(buf.loss_list.len(), 8);
+        // 当該パケットは破棄されること
+        assert!(!buf.packets.contains_key(&far_seq));
+        assert_eq!(buf.expected_sequence(), 1000);
+        // 追跡した分のみ計上されること
+        assert_eq!(buf.stats().total_lost, 8);
+    }
+
+    #[test]
+    fn test_receive_gap_at_cap_boundary() {
+        // ギャップが上限ちょうどなら受け入れ、上限超過なら破棄すること
+        let start = Timestamp::from_micros(0);
+        let now = Timestamp::from_micros(1000);
+
+        let mut buf = ReceiverBuffer::new(2000, 120, start, 0);
+        buf.set_tsbpd_enabled(false);
+        buf.max_buffer_size = 8;
+
+        // ギャップ 8 (上限ちょうど) は受け入れる
+        let losses = buf.receive(make_packet(2008, 100), now);
+        let lost = losses.expect("上限ちょうどの欠損は追跡される想定");
+        assert_eq!(lost.len(), 8);
+        assert!(buf.packets.contains_key(&2008));
+
+        let mut buf = ReceiverBuffer::new(3000, 120, start, 0);
+        buf.set_tsbpd_enabled(false);
+        buf.max_buffer_size = 8;
+
+        // ギャップ 9 (上限超過) は破棄する
+        let losses = buf.receive(make_packet(3009, 100), now);
+        let lost = losses.expect("上限までの欠損は追跡される想定");
+        assert_eq!(lost.len(), 8);
+        assert!(!buf.packets.contains_key(&3009));
+        assert_eq!(buf.expected_sequence(), 3000);
+    }
+
+    #[test]
+    fn test_receive_recovers_after_gap_discard() {
+        // 打ち切り後も配信と損失検出が継続すること
+        let start = Timestamp::from_micros(0);
+        let mut buf = ReceiverBuffer::new(1000, 120, start, 0);
+        buf.set_tsbpd_enabled(false);
+        buf.max_buffer_size = 8;
+
+        let now = Timestamp::from_micros(1000);
+
+        buf.receive(make_packet(1000, 100), now);
+        // 遠方パケットは破棄される
+        let far_seq = 1000 + 0x3FFF_FFFF;
+        buf.receive(make_packet(far_seq, 200), now);
+        assert!(!buf.packets.contains_key(&far_seq));
+
+        // 打ち切り前に到着済みのパケットは配信できること
+        let pkt = buf.pop_ready(now);
+        assert_eq!(
+            pkt.expect("到着済みパケットは配信できる想定")
+                .sequence_number,
+            1000
+        );
+
+        // 後続の誠実なパケットで送受信が継続すること
+        let losses = buf.receive(make_packet(1001, 300), now);
+        assert!(losses.is_none());
+        let pkt = buf.pop_ready(now);
+        assert_eq!(
+            pkt.expect("到着済みパケットは配信できる想定")
+                .sequence_number,
+            1001
+        );
+
+        // 追跡中の欠損に対して NAK を生成できること
+        let nak = buf.generate_periodic_nak();
+        let nak = nak.expect("追跡中の欠損がある想定");
+        assert!(nak.loss_list.contains(&1002));
+    }
+
+    #[test]
+    fn test_receive_discards_excessive_gap_across_wrap() {
+        // ラップ境界をまたぐ上限超過ギャップも破棄されること
+        let start = Timestamp::from_micros(0);
+        let mut buf = ReceiverBuffer::new(0x7FFF_FFF0, 120, start, 0);
+        buf.set_tsbpd_enabled(false);
+        buf.max_buffer_size = 8;
+
+        let now = Timestamp::from_micros(1000);
+
+        // 差分 4112 (上限超過) でラップ境界をまたぐ seq を受信する
+        let wrap_seq = 0x0000_1000;
+        let losses = buf.receive(make_packet(wrap_seq, 100), now);
+
+        // 上限まで追跡して打ち切られること
+        let lost = losses.expect("上限までの欠損は追跡される想定");
+        assert_eq!(lost.len(), 8);
+        assert_eq!(buf.loss_list.len(), 8);
+        // 当該パケットは破棄されること
+        assert!(!buf.packets.contains_key(&wrap_seq));
+        assert_eq!(buf.expected_sequence(), 0x7FFF_FFF0);
     }
 
     #[test]

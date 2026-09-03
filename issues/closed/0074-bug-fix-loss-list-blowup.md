@@ -1,7 +1,7 @@
 # receive の損失検出ループで loss_list が大量に肥大化する
 
 - Created: 2026-08-16
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-09-03
 - Branch: feature/fix-loss-list-blowup
 - Polished: 2026-09-03
 
@@ -59,5 +59,13 @@ while sequence_less_than(s, seq) {
 - `src/srt_receiver.rs` の `receive` メソッドの損失検出ループに `max_buffer_size` による反復回数上限を導入する
 - `loss_list` への追加時にエントリ数上限チェックを導入する (0055 適用後は `insert` 操作に対する上限チェックに読み替える)
 - テストは 0059 と同様に、`max_buffer_size` フィールドに小さい値を直接設定して、ループが打ち切られ `loss_list` が肥大化しないこと、超過パケットが破棄されること、打ち切り後の誠実なパケット受信で損失検出と NAK 生成が動作することを検証する
+
+## 解決方法
+
+`src/srt_receiver.rs` の `receive` メソッドの損失検出ループに上限を導入した。反復回数と `loss_list` への登録件数の両方に既存の `max_buffer_size` を適用し (二重の防御)、上限により追加しなかった分は `total_lost` に計上しない。上限を超えるギャップを検出した場合は当該パケットを `packets` から除去して破棄し、`expected_seq` は進めない。登録済みの欠損は残すため、後続の誠実なパケット受信で NAK 回復する。
+
+`src/srt_receiver.rs` 内の `#[cfg(test)]` モジュールに単体テスト 4 件を追加した。上限超過ギャップの破棄と肥大化防止、上限ちょうどでの受け入れと超過での破棄の境界値、破棄後の `pop_ready` 継続と NAK 生成による回復、ラップ境界をまたぐ上限超過ギャップの破棄を検証する。
+
+`CHANGES.md` の `## develop` セクションに `[FIX]` エントリを追加した。
 
 なお、0028 (`receive` の分割。損失検出ループの抽出を含む)、0055 (`loss_list` の `HashSet` 化)、0073 (`find_deliverable_seq` の最適化)、0059 (受信バッファ上限) は同じ `receive` メソッドまたは `loss_list` を変更するため、並行実装時は直列に実装する (先後は問わない)。
