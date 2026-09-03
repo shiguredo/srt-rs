@@ -402,6 +402,9 @@ impl ReceiverBuffer {
     /// 当該パケットを破棄し、新規に追跡した欠損 (上限で打ち切られた範囲まで)
     /// を返す (`expected_seq` は進めない)。追加が抑止された場合は `None` を
     /// 返すことがある。破棄した場合も受信統計 (`total_received` 等) には計上される
+    ///
+    /// `packets` の件数が収容上限に達している場合も、当該パケットを破棄して
+    /// `None` を返す (`loss_list` には登録しない)
     pub fn receive(&mut self, packet: DataPacket, now: Timestamp) -> Option<Vec<u32>> {
         let seq = packet.sequence_number;
 
@@ -465,6 +468,18 @@ impl ReceiverBuffer {
         } else {
             now
         };
+
+        // 受信バッファ上限チェック (セーフティネット)
+        //
+        // packets の無制限な肥大化によるメモリ枯渇と、generate_ack 内の
+        // available_buffer 計算の u32 アンダーフローを防ぐため、収容上限に
+        // 達している場合は新しいパケットを受け入れない (破棄する)。
+        // 破棄したパケットは loss_list にも登録しない。バッファが上限未満に
+        // 戻って後続パケットが受け入れられた時点で、損失検出ループが欠損
+        // として登録し、NAK 経由で再送される。
+        if (self.packets.len() as u32) >= self.max_buffer_size {
+            return None;
+        }
 
         // バッファに追加
         self.packets.insert(
@@ -966,6 +981,63 @@ mod tests {
         // 当該パケットは破棄されること
         assert!(!buf.packets.contains_key(&wrap_seq));
         assert_eq!(buf.expected_sequence(), 0x7FFF_FFF0);
+    }
+
+    #[test]
+    fn test_receive_discards_packet_when_buffer_full() {
+        // バッファが上限に達している場合に新しいパケットを破棄すること
+        let start = Timestamp::from_micros(0);
+        let mut buf = ReceiverBuffer::new(1000, 120, start, 0);
+        buf.set_tsbpd_enabled(false);
+        buf.max_buffer_size = 4;
+
+        let now = Timestamp::from_micros(1000);
+
+        // バッファを上限まで満たす
+        buf.receive(make_packet(1000, 100), now);
+        buf.receive(make_packet(1001, 200), now);
+        buf.receive(make_packet(1002, 300), now);
+        buf.receive(make_packet(1003, 400), now);
+        assert_eq!(buf.packets.len(), 4);
+
+        // 上限到達後のパケットは破棄されること
+        let losses = buf.receive(make_packet(1004, 500), now);
+        assert!(losses.is_none());
+        assert_eq!(buf.packets.len(), 4);
+        assert!(!buf.packets.contains_key(&1004));
+        // loss_list にも登録されないこと
+        assert!(buf.loss_list.is_empty());
+        assert_eq!(buf.expected_sequence(), 1004);
+
+        // バッファが空けば後続パケットを受け入れること
+        let pkt = buf.pop_ready(now);
+        assert_eq!(
+            pkt.expect("到着済みパケットは配信できる想定")
+                .sequence_number,
+            1000
+        );
+        let losses = buf.receive(make_packet(1004, 500), now);
+        assert!(losses.is_none());
+        assert!(buf.packets.contains_key(&1004));
+    }
+
+    #[test]
+    fn test_generate_ack_at_full_buffer_does_not_underflow() {
+        // 満杯でも available_buffer 計算がアンダーフローしないこと
+        let start = Timestamp::from_micros(0);
+        let mut buf = ReceiverBuffer::new(1000, 120, start, 0);
+        buf.set_tsbpd_enabled(false);
+        buf.max_buffer_size = 4;
+
+        let now = Timestamp::from_micros(1000);
+
+        buf.receive(make_packet(1000, 100), now);
+        buf.receive(make_packet(1001, 200), now);
+        buf.receive(make_packet(1002, 300), now);
+        buf.receive(make_packet(1003, 400), now);
+
+        let ack = buf.generate_ack(now);
+        assert_eq!(ack.available_buffer, 0);
     }
 
     #[test]
